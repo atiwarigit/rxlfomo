@@ -27,6 +27,10 @@ export interface Position {
   thesis?: string;
   liquidityUsd?: number;
   source: 'fomo' | 'onchain' | 'merged';
+  change24hPct?: number;
+  pnl24hUsd?: number;
+  hasCostBasis?: boolean;
+  volume24hUsd?: number;
 }
 
 export interface ClosedTrade {
@@ -75,10 +79,11 @@ export interface PortfolioSummary {
   totalEquity: number;
   cashUsd: number;
   openPositionsValue: number;
-  realizedPnlAllTime: number;
+  realizedPnlAllTime: number | null;
   realizedPnl7d: number | null;
   realizedPnl30d: number | null;
   unrealizedPnl: number;
+  volumeUsd?: number | null;
   peakEquity: number;
   currentDrawdownPct: number;
   winRate: number;

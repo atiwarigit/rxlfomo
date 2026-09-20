@@ -5,6 +5,9 @@ export interface DexPair {
   marketCap?: number;
   fdv?: number;
   liquidity?: { usd?: number };
+  volume?: { h24?: number };
+  priceChange?: { m5?: number; h1?: number; h6?: number; h24?: number };
+  pairCreatedAt?: number;
   baseToken?: { address?: string; symbol?: string; name?: string };
   quoteToken?: { address?: string; symbol?: string; name?: string };
 }
@@ -13,6 +16,8 @@ export interface TokenMarket {
   priceUsd: number;
   marketCapUsd: number;
   liquidityUsd: number;
+  change24hPct?: number;
+  volume24hUsd?: number;
   symbol?: string;
   name?: string;
 }
@@ -34,9 +39,12 @@ export async function fetchDexMarkets(
 ): Promise<Map<string, TokenMarket>> {
   const out = new Map<string, TokenMarket>();
   const unique = [...new Set(mints.filter(Boolean))];
-  const chunkSize = 25;
-  for (let i = 0; i < unique.length; i += chunkSize) {
-    const chunk = unique.slice(i, i + chunkSize);
+  const groups = [unique.filter((m) => m.startsWith('0x')), unique.filter((m) => !m.startsWith('0x'))];
+  const chunkSize = 10;
+  for (const group of groups) {
+    for (let i = 0; i < group.length; i += chunkSize) {
+      const chunk = group.slice(i, i + chunkSize);
+      if (!chunk.length) continue;
     const url = `${DEX_TOKENS}/${chunk.join(',')}`;
     try {
       const res = await fetchFn(url, { signal: AbortSignal.timeout(15_000) });
@@ -49,16 +57,22 @@ export async function fetchDexMarkets(
         const priceUsd = Number(best.priceUsd);
         if (!Number.isFinite(priceUsd)) continue;
         const isBase = best.baseToken?.address?.toLowerCase() === mint.toLowerCase();
-        out.set(mint, {
+        const change24hPct = Number(best.priceChange?.h24);
+        const row: TokenMarket = {
           priceUsd,
           marketCapUsd: Number(best.marketCap || best.fdv || 0) || 0,
           liquidityUsd: Number(best.liquidity?.usd || 0) || 0,
+          change24hPct: Number.isFinite(change24hPct) ? change24hPct : undefined,
+          volume24hUsd: Number(best.volume?.h24) || undefined,
           symbol: isBase ? best.baseToken?.symbol : best.quoteToken?.symbol,
           name: isBase ? best.baseToken?.name : best.quoteToken?.name,
-        });
+        };
+        out.set(mint, row);
+        out.set(mint.toLowerCase(), row);
       }
     } catch {
       // keep going; missing prices are handled upstream
+    }
     }
   }
   return out;

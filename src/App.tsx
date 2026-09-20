@@ -106,7 +106,7 @@ function App() {
       const stored = appendEquityLog({
         date: today,
         equity: snap.summary.totalEquity,
-        realizedPnl: snap.summary.realizedPnlAllTime,
+        realizedPnl: snap.summary.realizedPnlAllTime ?? 0,
       });
       snap.equityCurve = mergeEquityLogs(snap.equityCurve, stored);
       setData(snap);
@@ -218,21 +218,33 @@ function App() {
               />
               <StatCard
                 label="Realized PnL"
-                value={formatUsd(summary.realizedPnlAllTime, true)}
-                sub={
-                  summary.realizedPnl7d != null
-                    ? `7d ${formatUsd(summary.realizedPnl7d, true)}`
-                    : 'All-time closed'
+                value={
+                  summary.realizedPnlAllTime == null
+                    ? '—'
+                    : formatUsd(summary.realizedPnlAllTime, true)
                 }
-                trend={summary.realizedPnlAllTime >= 0 ? 'up' : 'down'}
+                sub={
+                  summary.volumeUsd != null
+                    ? `Vol ${formatUsd(summary.volumeUsd, true)} · ${summary.totalTrades} trades`
+                    : summary.realizedPnl7d != null
+                      ? `7d ${formatUsd(summary.realizedPnl7d, true)}`
+                      : 'All-time closed'
+                }
+                trend={
+                  summary.realizedPnlAllTime == null
+                    ? 'neutral'
+                    : summary.realizedPnlAllTime >= 0
+                      ? 'up'
+                      : 'down'
+                }
               />
               <StatCard
                 label="Unrealized"
                 value={formatUsd(summary.unrealizedPnl, true)}
                 sub={
-                  summary.openPositionsValue
-                    ? formatPct((summary.unrealizedPnl / summary.openPositionsValue) * 100)
-                    : 'Open book'
+                  data.openPositions.some((p) => p.hasCostBasis)
+                    ? 'Cost basis where known, else 24h'
+                    : '24h mark-to-market'
                 }
                 trend={summary.unrealizedPnl >= 0 ? 'up' : 'down'}
               />
@@ -250,9 +262,21 @@ function App() {
               />
               <StatCard
                 label="Win Rate"
-                value={`${summary.winRate.toFixed(1)}%`}
-                sub={`PF ${summary.profitFactor.toFixed(2)} · ${summary.closedTradesCaptured}/${summary.totalTrades} trades`}
-                trend={summary.winRate >= 50 ? 'up' : 'neutral'}
+                value={
+                  summary.closedTradesCaptured ? `${summary.winRate.toFixed(1)}%` : '—'
+                }
+                sub={
+                  summary.closedTradesCaptured
+                    ? `PF ${summary.profitFactor.toFixed(2)} · ${summary.closedTradesCaptured}/${summary.totalTrades} trades`
+                    : `${summary.totalTrades} FOMO trades · tape not indexed`
+                }
+                trend={
+                  !summary.closedTradesCaptured
+                    ? 'neutral'
+                    : summary.winRate >= 50
+                      ? 'up'
+                      : 'neutral'
+                }
               />
             </section>
 
@@ -260,6 +284,7 @@ function App() {
               <StatCard
                 label="PnL 24h"
                 value={data.pnlWindows.h24 == null ? '—' : formatUsd(data.pnlWindows.h24, true)}
+                sub="Live Dex / Relay marks"
                 trend={
                   data.pnlWindows.h24 == null ? 'neutral' : data.pnlWindows.h24 >= 0 ? 'up' : 'down'
                 }
@@ -297,7 +322,7 @@ function App() {
                   <TrendingUp size={18} className="text-emerald-400" />
                   <h2 className="font-semibold">Equity Curve</h2>
                   <span className="text-xs text-white/40">
-                    Live pull + local daily snapshots
+                    Live 24h mark + local daily snapshots
                   </span>
                 </div>
                 {data.equityCurve.length > 1 ? (

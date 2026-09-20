@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCashAsset, normalizeChain } from './helpers.ts';
+import { isCashAsset, normalizeChain, pnlFromChangePct } from './helpers.ts';
 import { buildAlerts, buildEquityCurve, statsFromClosed } from './metrics.ts';
 import type { ClosedTrade, Position } from '../../types/portfolio.ts';
 
@@ -31,6 +31,11 @@ describe('helpers', () => {
     expect(normalizeChain(undefined, 1399811149)).toBe('solana');
     expect(normalizeChain('base', 8453)).toBe('base');
     expect(normalizeChain('robinhood', 4663)).toBe('robinhood');
+  });
+
+  it('converts a 24h percent move into USD PnL at the current mark', () => {
+    expect(pnlFromChangePct(100, 25)).toBeCloseTo(20);
+    expect(pnlFromChangePct(50, -50)).toBeCloseTo(-50);
   });
 });
 

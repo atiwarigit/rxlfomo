@@ -1,5 +1,5 @@
 import type { Position } from '../types/portfolio';
-import { formatUsd, formatPct, formatMcap, cn } from '../lib/format';
+import { formatUsd, formatPct, formatMcap, formatPrice, cn } from '../lib/format';
 
 interface Props {
   positions: Position[];
@@ -26,17 +26,20 @@ export function PositionsTable({ positions, totalEquity }: Props) {
             <th className="px-4 py-3">Token</th>
             <th className="px-4 py-3 text-right">Size</th>
             <th className="px-4 py-3 text-right">% Port</th>
+            <th className="px-4 py-3 text-right">24h</th>
             <th className="px-4 py-3 text-right">Unrealized</th>
             <th className="px-4 py-3 text-right">Entry → Now</th>
             <th className="px-4 py-3 text-right">Liq</th>
-            <th className="px-4 py-3 text-right">Hold</th>
             <th className="px-4 py-3">Chain</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-white/5">
           {sorted.map((p) => {
             const pctOfPort = (p.sizeUsd / equity) * 100;
-            const isProfit = p.unrealizedPnl >= 0;
+            const chg = p.change24hPct;
+            const pnl24 = p.pnl24hUsd;
+            const showBasis = Boolean(p.hasCostBasis);
+            const isProfit = showBasis ? p.unrealizedPnl >= 0 : (pnl24 ?? 0) >= 0;
             return (
               <tr key={p.id} className="hover:bg-white/5 transition-colors">
                 <td className="px-4 py-3">
@@ -61,25 +64,46 @@ export function PositionsTable({ positions, totalEquity }: Props) {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <div className={cn(isProfit ? 'text-emerald-400' : 'text-rose-400')}>
-                    {formatUsd(p.unrealizedPnl)}
-                  </div>
-                  <div className="text-xs text-white/40">{formatPct(p.unrealizedPnlPct)}</div>
+                  {chg == null && pnl24 == null ? (
+                    <span className="text-white/40">—</span>
+                  ) : (
+                    <>
+                      <div
+                        className={cn(
+                          (pnl24 ?? chg ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400',
+                        )}
+                      >
+                        {pnl24 == null ? '—' : formatUsd(pnl24)}
+                      </div>
+                      <div className="text-xs text-white/40">
+                        {chg == null ? '' : formatPct(chg)}
+                      </div>
+                    </>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {showBasis ? (
+                    <>
+                      <div className={cn(isProfit ? 'text-emerald-400' : 'text-rose-400')}>
+                        {formatUsd(p.unrealizedPnl)}
+                      </div>
+                      <div className="text-xs text-white/40">{formatPct(p.unrealizedPnlPct)}</div>
+                    </>
+                  ) : (
+                    <span className="text-white/40">—</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-right text-xs text-white/60">
-                  {p.entryMcap || p.currentMcap
+                  {showBasis && (p.entryMcap || p.currentMcap)
                     ? `${formatMcap(p.entryMcap)} → ${formatMcap(p.currentMcap)}`
-                    : `${p.entryPrice ? p.entryPrice.toPrecision(3) : '—'} → ${p.currentPrice ? p.currentPrice.toPrecision(3) : '—'}`}
+                    : showBasis
+                      ? `${formatPrice(p.entryPrice)} → ${formatPrice(p.currentPrice)}`
+                      : p.currentMcap
+                        ? `${formatPrice(p.currentPrice)} · ${formatMcap(p.currentMcap)}`
+                        : formatPrice(p.currentPrice)}
                 </td>
                 <td className="px-4 py-3 text-right text-xs text-white/50">
                   {p.liquidityUsd ? formatMcap(p.liquidityUsd) : '—'}
-                </td>
-                <td className="px-4 py-3 text-right text-white/60">
-                  {p.holdTimeHours <= 0
-                    ? '—'
-                    : p.holdTimeHours < 24
-                      ? `${p.holdTimeHours.toFixed(0)}h`
-                      : `${(p.holdTimeHours / 24).toFixed(1)}d`}
                 </td>
                 <td className="px-4 py-3">
                   <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs capitalize">

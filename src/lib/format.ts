@@ -10,6 +10,13 @@ export function formatUsd(value: number, compact = false): string {
   }).format(value);
 }
 
+export function formatPrice(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  if (value >= 100) return `$${value.toFixed(0)}`;
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  return `$${Number(value.toPrecision(3))}`;
+}
+
 export function formatPct(value: number, digits = 1): string {
   const sign = value > 0 ? '+' : '';
   return `${sign}${value.toFixed(digits)}%`;

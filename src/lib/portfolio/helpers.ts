@@ -60,3 +60,14 @@ export function compactAddress(addr?: string, size = 4): string {
   if (addr.length <= size * 2 + 3) return addr;
   return `${addr.slice(0, size)}…${addr.slice(-size)}`;
 }
+
+/** USD change implied by a Dex/% window move, given current mark. */
+export function pnlFromChangePct(valueUsd: number, changePct?: number | null): number {
+  if (changePct == null || !Number.isFinite(changePct) || changePct <= -99.999) return 0;
+  return valueUsd * (changePct / (100 + changePct));
+}
+
+export function inferredEntryMcap(currentMcap: number, entryPrice: number, currentPrice: number): number {
+  if (currentMcap <= 0 || entryPrice <= 0 || currentPrice <= 0) return 0;
+  return currentMcap * (entryPrice / currentPrice);
+}

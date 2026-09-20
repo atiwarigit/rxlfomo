@@ -2,7 +2,9 @@ import type {
   FomoBalancesResponse,
   FomoLeaderboardResponse,
   FomoPositionsResponse,
+  FomoRelaySwapsResponse,
   FomoSearchResponse,
+  FomoSpotlightResponse,
   FomoUser,
 } from './types.ts';
 
@@ -106,6 +108,19 @@ export function createFomoClient(opts: FomoClientOptions) {
       return getJson<FomoLeaderboardResponse>(
         fetchFn,
         `${base}/v2/leaderboard/${window}?limit=${limit}`,
+        key,
+        30_000,
+      );
+    },
+    spotlight(handle: string) {
+      const h = encodeURIComponent(handle.replace(/^@/, ''));
+      return getJson<FomoSpotlightResponse>(fetchFn, `${base}/v2/users/${h}/spotlight`, key, 20_000);
+    },
+    relaySwaps(handle: string) {
+      const h = encodeURIComponent(handle.replace(/^@/, ''));
+      return getJson<FomoRelaySwapsResponse>(
+        fetchFn,
+        `${base}/v2/users/${h}/swaps?source=relay&limit=100`,
         key,
         30_000,
       );

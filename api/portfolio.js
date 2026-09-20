@@ -87,6 +87,19 @@ function createFomoClient(opts) {
         key,
         3e4
       );
+    },
+    spotlight(handle) {
+      const h = encodeURIComponent(handle.replace(/^@/, ""));
+      return getJson(fetchFn, `${base}/v2/users/${h}/spotlight`, key, 2e4);
+    },
+    relaySwaps(handle) {
+      const h = encodeURIComponent(handle.replace(/^@/, ""));
+      return getJson(
+        fetchFn,
+        `${base}/v2/users/${h}/swaps?source=relay&limit=100`,
+        key,
+        3e4
+      );
     }
   };
 }
@@ -103,30 +116,39 @@ function pickBestPair(pairs, mint) {
 async function fetchDexMarkets(mints, fetchFn = fetch) {
   const out = /* @__PURE__ */ new Map();
   const unique = [...new Set(mints.filter(Boolean))];
-  const chunkSize = 25;
-  for (let i = 0; i < unique.length; i += chunkSize) {
-    const chunk = unique.slice(i, i + chunkSize);
-    const url = `${DEX_TOKENS}/${chunk.join(",")}`;
-    try {
-      const res = await fetchFn(url, { signal: AbortSignal.timeout(15e3) });
-      if (!res.ok) continue;
-      const body = await res.json();
-      const pairs = Array.isArray(body) ? body : body.pairs ?? [];
-      for (const mint of chunk) {
-        const best = pickBestPair(pairs, mint);
-        if (!best?.priceUsd) continue;
-        const priceUsd = Number(best.priceUsd);
-        if (!Number.isFinite(priceUsd)) continue;
-        const isBase = best.baseToken?.address?.toLowerCase() === mint.toLowerCase();
-        out.set(mint, {
-          priceUsd,
-          marketCapUsd: Number(best.marketCap || best.fdv || 0) || 0,
-          liquidityUsd: Number(best.liquidity?.usd || 0) || 0,
-          symbol: isBase ? best.baseToken?.symbol : best.quoteToken?.symbol,
-          name: isBase ? best.baseToken?.name : best.quoteToken?.name
-        });
+  const groups = [unique.filter((m) => m.startsWith("0x")), unique.filter((m) => !m.startsWith("0x"))];
+  const chunkSize = 10;
+  for (const group of groups) {
+    for (let i = 0; i < group.length; i += chunkSize) {
+      const chunk = group.slice(i, i + chunkSize);
+      if (!chunk.length) continue;
+      const url = `${DEX_TOKENS}/${chunk.join(",")}`;
+      try {
+        const res = await fetchFn(url, { signal: AbortSignal.timeout(15e3) });
+        if (!res.ok) continue;
+        const body = await res.json();
+        const pairs = Array.isArray(body) ? body : body.pairs ?? [];
+        for (const mint of chunk) {
+          const best = pickBestPair(pairs, mint);
+          if (!best?.priceUsd) continue;
+          const priceUsd = Number(best.priceUsd);
+          if (!Number.isFinite(priceUsd)) continue;
+          const isBase = best.baseToken?.address?.toLowerCase() === mint.toLowerCase();
+          const change24hPct = Number(best.priceChange?.h24);
+          const row = {
+            priceUsd,
+            marketCapUsd: Number(best.marketCap || best.fdv || 0) || 0,
+            liquidityUsd: Number(best.liquidity?.usd || 0) || 0,
+            change24hPct: Number.isFinite(change24hPct) ? change24hPct : void 0,
+            volume24hUsd: Number(best.volume?.h24) || void 0,
+            symbol: isBase ? best.baseToken?.symbol : best.quoteToken?.symbol,
+            name: isBase ? best.baseToken?.name : best.quoteToken?.name
+          };
+          out.set(mint, row);
+          out.set(mint.toLowerCase(), row);
+        }
+      } catch {
       }
-    } catch {
     }
   }
   return out;
@@ -362,6 +384,14 @@ function asNumber(value, fallback = 0) {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
+function pnlFromChangePct(valueUsd, changePct) {
+  if (changePct == null || !Number.isFinite(changePct) || changePct <= -99.999) return 0;
+  return valueUsd * (changePct / (100 + changePct));
+}
+function inferredEntryMcap(currentMcap, entryPrice, currentPrice) {
+  if (currentMcap <= 0 || entryPrice <= 0 || currentPrice <= 0) return 0;
+  return currentMcap * (entryPrice / currentPrice);
+}
 
 // src/lib/portfolio/metrics.ts
 function statsFromClosed(trades) {
@@ -477,9 +507,117 @@ function buildAlerts(equity, cashUsd, positions, ddPct) {
   return alerts;
 }
 
-// src/lib/portfolio/load.ts
+// src/lib/portfolio/relayPositions.ts
 var DUST_USD = 5;
+function tokenKey(address, symbol, chainId) {
+  return `${(address || symbol || "").toLowerCase()}::${chainId ?? ""}`;
+}
+function positionsFromRelaySwaps(swaps) {
+  const map = /* @__PURE__ */ new Map();
+  const bump = (token, chain, fallbackChainId, at, side) => {
+    if (!token) return;
+    const symbol = token.symbol || "UNKNOWN";
+    const address = token.address || symbol;
+    const chainId = token.chainId ?? fallbackChainId;
+    const key = tokenKey(address, symbol, chainId);
+    const prev = map.get(key) ?? {
+      symbol,
+      address,
+      chain,
+      chainId,
+      boughtAmount: 0,
+      boughtUsd: 0,
+      boughtUsdNow: 0,
+      soldAmount: 0,
+      soldUsd: 0,
+      lastAt: at
+    };
+    const amount = asNumber(token.amount);
+    const usd = asNumber(token.usd);
+    const usdNow = asNumber(token.usdNow);
+    if (side === "buy") {
+      prev.boughtAmount += amount;
+      prev.boughtUsd += usd;
+      prev.boughtUsdNow += usdNow || usd;
+    } else {
+      prev.soldAmount += amount;
+      prev.soldUsd += usd;
+    }
+    prev.chain = prev.chain || chain;
+    prev.lastAt = at || prev.lastAt;
+    map.set(key, prev);
+  };
+  for (const swap of swaps) {
+    bump(swap.tokenOut, swap.toChain || swap.chain, swap.chainId, swap.at, "buy");
+    bump(swap.tokenIn, swap.fromChain || swap.chain, swap.tokenIn?.chainId ?? swap.chainId, swap.at, "sell");
+  }
+  const out = [];
+  for (const row of map.values()) {
+    const remaining = row.boughtAmount - row.soldAmount;
+    if (remaining <= 0) continue;
+    const frac = row.boughtAmount > 0 ? remaining / row.boughtAmount : 0;
+    const cost = row.boughtUsd * frac;
+    const value = (row.boughtUsdNow > 0 ? row.boughtUsdNow : row.boughtUsd) * frac;
+    if (value < DUST_USD && !isCashAsset(row.symbol, row.address)) continue;
+    const entry = remaining > 0 ? cost / remaining : 0;
+    const price = remaining > 0 ? value / remaining : 0;
+    const unrealized = value - cost;
+    out.push({
+      id: `relay-${row.address}`,
+      token: row.symbol,
+      symbol: row.symbol,
+      mint: row.address,
+      chain: normalizeChain(row.chain, row.chainId),
+      sizeUsd: value,
+      amount: remaining,
+      entryPrice: entry,
+      currentPrice: price,
+      entryMcap: 0,
+      currentMcap: 0,
+      unrealizedPnl: unrealized,
+      unrealizedPnlPct: cost > 0 ? unrealized / cost * 100 : 0,
+      holdTimeHours: 0,
+      entryDate: row.lastAt || (/* @__PURE__ */ new Date()).toISOString(),
+      source: "fomo",
+      hasCostBasis: cost > 0
+    });
+  }
+  return out;
+}
+
+// src/lib/portfolio/load.ts
+var DUST_USD2 = 5;
 var WSOL3 = "So11111111111111111111111111111111111111112";
+function marketFor(mint, markets) {
+  if (!mint) return void 0;
+  return markets.get(mint) || markets.get(mint.toLowerCase());
+}
+function withMarketMove(p, markets) {
+  const market = marketFor(p.mint, markets);
+  const currentPrice = market?.priceUsd || p.currentPrice || 0;
+  const amount = p.amount || 0;
+  const sizeUsd = currentPrice > 0 && amount > 0 ? currentPrice * amount : p.sizeUsd;
+  const change24hPct = p.change24hPct ?? market?.change24hPct;
+  const currentMcap = market?.marketCapUsd || p.currentMcap || 0;
+  const entryMcap = p.entryMcap || (p.hasCostBasis ? inferredEntryMcap(currentMcap, p.entryPrice, currentPrice) : 0);
+  const cost = p.hasCostBasis && p.entryPrice > 0 && amount > 0 ? p.entryPrice * amount : 0;
+  const unrealizedPnl = cost > 0 && currentPrice > 0 ? (currentPrice - p.entryPrice) * amount : p.unrealizedPnl;
+  const unrealizedPnlPct = cost > 0 ? unrealizedPnl / cost * 100 : p.unrealizedPnlPct;
+  const pnl24hUsd = change24hPct != null ? pnlFromChangePct(sizeUsd, change24hPct) : p.pnl24hUsd;
+  return {
+    ...p,
+    sizeUsd,
+    currentPrice: currentPrice || p.currentPrice,
+    currentMcap,
+    entryMcap,
+    unrealizedPnl,
+    unrealizedPnlPct,
+    liquidityUsd: p.liquidityUsd || market?.liquidityUsd,
+    change24hPct,
+    pnl24hUsd,
+    volume24hUsd: p.volume24hUsd ?? market?.volume24hUsd
+  };
+}
 function tokenField(row) {
   if (row.token && typeof row.token === "object") {
     return {
@@ -495,21 +633,23 @@ function tokenField(row) {
 function isOpenRow(row) {
   const s = (row.status || "").toLowerCase();
   if (s === "closed" || s === "exited" || Boolean(row.closedAt)) return false;
-  if (s === "open" || s === "active" || s === "opened") return true;
-  return !row.avgExitPrice;
+  return true;
 }
 function mapOpenPosition(row, markets) {
   const token = tokenField(row);
   const amount = asNumber(row.amount);
   const entry = asNumber(row.avgEntryPrice);
-  const livePrice = asNumber(row.priceUsd) || (token.address ? markets.get(token.address)?.priceUsd ?? 0 : 0);
+  const livePrice = asNumber(row.priceUsd) || marketFor(token.address, markets)?.priceUsd || asNumber(row.avgExitPrice);
   const cost = asNumber(row.costBasisUsd) || (entry > 0 && amount > 0 ? entry * amount : 0);
   const mtm = livePrice > 0 && amount > 0 ? livePrice * amount : cost;
   const sizeUsd = mtm || cost;
-  if (sizeUsd < DUST_USD && asNumber(row.unrealizedPnlUsd) === 0) return null;
-  const unrealized = row.unrealizedPnlUsd != null ? asNumber(row.unrealizedPnlUsd) : livePrice && entry ? (livePrice - entry) * amount : 0;
-  const market = token.address ? markets.get(token.address) : void 0;
+  if (sizeUsd < DUST_USD2 && asNumber(row.unrealizedPnlUsd) === 0) return null;
+  const hasCostBasis = entry > 0 && cost > 0;
+  const unrealized = livePrice > 0 && entry > 0 && amount > 0 ? (livePrice - entry) * amount : asNumber(row.unrealizedPnlUsd);
+  const market = marketFor(token.address, markets);
   const opened = row.createdAt || row.openedAt || (/* @__PURE__ */ new Date()).toISOString();
+  const currentPrice = livePrice || entry;
+  const currentMcap = asNumber(row.marketCapUsd) || market?.marketCapUsd || 0;
   return {
     id: row.tradeId || row.id || `${token.symbol}-${opened}`,
     token: token.symbol,
@@ -519,16 +659,20 @@ function mapOpenPosition(row, markets) {
     sizeUsd,
     amount,
     entryPrice: entry,
-    currentPrice: livePrice || entry,
-    entryMcap: asNumber(row.entryMarketCapUsd),
-    currentMcap: asNumber(row.marketCapUsd) || market?.marketCapUsd || 0,
+    currentPrice,
+    entryMcap: asNumber(row.entryMarketCapUsd) || inferredEntryMcap(currentMcap, entry, currentPrice),
+    currentMcap,
     unrealizedPnl: unrealized,
     unrealizedPnlPct: cost > 0 ? unrealized / cost * 100 : 0,
     holdTimeHours: hoursBetween(opened),
     entryDate: opened,
     thesis: row.thesis,
     liquidityUsd: asNumber(row.liquidityUsd) || market?.liquidityUsd || void 0,
-    source: "fomo"
+    source: "fomo",
+    hasCostBasis,
+    change24hPct: market?.change24hPct,
+    pnl24hUsd: market?.change24hPct != null ? pnlFromChangePct(sizeUsd, market.change24hPct) : void 0,
+    volume24hUsd: market?.volume24hUsd
   };
 }
 function mapClosedTrade(row) {
@@ -576,11 +720,13 @@ function holdingSymbol(h) {
 }
 function mapHoldingToPosition(h, markets) {
   const tok = holdingSymbol(h);
+  const market = marketFor(tok.address, markets);
   const amount = asNumber(h.amount);
-  const price = asNumber(h.priceUsd) || (tok.address ? markets.get(tok.address)?.priceUsd ?? 0 : 0);
+  const price = asNumber(h.priceUsd) || market?.priceUsd || 0;
   const value = asNumber(h.valueUsd) || amount * price;
-  if (value < DUST_USD) return null;
-  const market = tok.address ? markets.get(tok.address) : void 0;
+  if (value < DUST_USD2) return null;
+  const change24hPct = h.change24h != null && h.change24h !== void 0 ? asNumber(h.change24h) : market?.change24hPct;
+  const pnl24hUsd = change24hPct != null ? pnlFromChangePct(value, change24hPct) : void 0;
   return {
     id: `bal-${tok.address || tok.symbol}`,
     token: tok.symbol,
@@ -589,24 +735,29 @@ function mapHoldingToPosition(h, markets) {
     chain: normalizeChain(tok.chain, tok.networkId),
     sizeUsd: value,
     amount,
-    entryPrice: price,
+    entryPrice: 0,
     currentPrice: price,
-    entryMcap: market?.marketCapUsd || asNumber(h.marketCapUsd),
+    entryMcap: 0,
     currentMcap: market?.marketCapUsd || asNumber(h.marketCapUsd),
-    unrealizedPnl: 0,
-    unrealizedPnlPct: 0,
+    unrealizedPnl: pnl24hUsd ?? 0,
+    unrealizedPnlPct: change24hPct || 0,
     holdTimeHours: 0,
     entryDate: (/* @__PURE__ */ new Date()).toISOString(),
     liquidityUsd: market?.liquidityUsd || asNumber(h.liquidityUsd) || void 0,
-    source: "fomo"
+    source: "fomo",
+    hasCostBasis: false,
+    change24hPct: change24hPct || void 0,
+    pnl24hUsd
   };
 }
 function mapOnchainPosition(h, markets, solPrice) {
-  const market = markets.get(h.mint);
+  const market = marketFor(h.mint, markets);
   const price = h.priceUsd ?? market?.priceUsd ?? (h.mint === WSOL3 || h.native ? solPrice : 0);
   const value = h.valueUsd ?? (price > 0 ? h.amount * price : 0);
-  if (value < DUST_USD) return null;
+  if (value < DUST_USD2) return null;
   const symbol = h.symbol || market?.symbol || h.mint.slice(0, 6);
+  const change24hPct = market?.change24hPct;
+  const pnl24hUsd = change24hPct != null ? pnlFromChangePct(value, change24hPct) : void 0;
   return {
     id: `onchain-${h.mint}`,
     token: symbol,
@@ -615,16 +766,20 @@ function mapOnchainPosition(h, markets, solPrice) {
     chain: "solana",
     sizeUsd: value,
     amount: h.amount,
-    entryPrice: price,
+    entryPrice: 0,
     currentPrice: price,
-    entryMcap: market?.marketCapUsd || 0,
+    entryMcap: 0,
     currentMcap: market?.marketCapUsd || 0,
-    unrealizedPnl: 0,
-    unrealizedPnlPct: 0,
+    unrealizedPnl: pnl24hUsd ?? 0,
+    unrealizedPnlPct: change24hPct ?? 0,
     holdTimeHours: 0,
     entryDate: (/* @__PURE__ */ new Date()).toISOString(),
     liquidityUsd: market?.liquidityUsd,
-    source: "onchain"
+    source: "onchain",
+    hasCostBasis: false,
+    change24hPct,
+    pnl24hUsd,
+    volume24hUsd: market?.volume24hUsd
   };
 }
 function mergePositions(fomo, onchain) {
@@ -648,10 +803,16 @@ function mergePositions(fomo, onchain) {
     byMint.set(key, {
       ...existing,
       sizeUsd: Math.max(existing.sizeUsd, p.sizeUsd),
-      currentPrice: existing.currentPrice || p.currentPrice,
-      currentMcap: existing.currentMcap || p.currentMcap,
+      amount: p.amount || existing.amount,
+      currentPrice: p.currentPrice || existing.currentPrice,
+      currentMcap: p.currentMcap || existing.currentMcap,
       liquidityUsd: existing.liquidityUsd || p.liquidityUsd,
-      source: "merged"
+      change24hPct: p.change24hPct ?? existing.change24hPct,
+      pnl24hUsd: p.pnl24hUsd ?? existing.pnl24hUsd,
+      volume24hUsd: p.volume24hUsd ?? existing.volume24hUsd,
+      thesis: existing.thesis || p.thesis,
+      hasCostBasis: Boolean(existing.hasCostBasis || p.hasCostBasis),
+      source: existing.hasCostBasis || existing.source === "fomo" ? "merged" : p.source
     });
   }
   return [...byMint.values(), ...noMint];
@@ -677,6 +838,7 @@ async function loadPortfolio(input) {
   let searchHit = null;
   let fomoPositions = [];
   let fomoHoldings = [];
+  let relayOpen = [];
   let closedTotalOnFomo;
   let livePerpPnl = 0;
   let fomoTotalValue;
@@ -718,7 +880,9 @@ async function loadPortfolio(input) {
       client.resolveUser(handle),
       client.positions(fomoKey),
       client.balances(fomoKey),
-      client.leaderboard("all")
+      client.leaderboard("all"),
+      client.spotlight(handle),
+      client.relaySwaps(handle)
     ]);
     const take = (i, label) => {
       const r = results[i];
@@ -738,6 +902,8 @@ async function loadPortfolio(input) {
     const pos = take(1, "Positions");
     const bal = take(2, "Balances");
     const board = take(3, "Leaderboard");
+    const spot = take(4, "Spotlight");
+    const relay = take(5, "Relay");
     if (user && !user.error) fomoOk = true;
     if (user?.wallets?.solana) solanaWallet = solanaWallet || user.wallets.solana;
     if (user?.wallets?.evm || user?.wallets?.ethereum) {
@@ -748,8 +914,14 @@ async function loadPortfolio(input) {
       fomoPositions = pos.positions ?? pos.trades ?? pos.items ?? [];
       closedTotalOnFomo = pos.closedTotalOnFomo;
       if (pos.available === false && !fomoPositions.length) {
-        warnings.push("FOMO has not captured trade history for this handle yet \u2014 using on-chain balances.");
+        warnings.push("FOMO has not captured the full trade tape for this handle yet.");
       }
+    }
+    if (spot?.bestTrades?.length) {
+      fomoPositions = [...fomoPositions, ...spot.bestTrades];
+    }
+    if (relay?.swaps?.length) {
+      relayOpen = positionsFromRelaySwaps(relay.swaps);
     }
     if (bal) {
       fomoHoldings = bal.holdings ?? bal.balances ?? [];
@@ -757,7 +929,7 @@ async function loadPortfolio(input) {
       const perp = bal.livePerpPnl;
       livePerpPnl = typeof perp === "number" ? perp : asNumber(perp?.usd);
       if (bal.available === false && !fomoHoldings.length) {
-        warnings.push("FOMO holdings feed is empty right now; on-chain mark-to-market is the live book.");
+        warnings.push("FOMO holdings feed is empty; using wallet + Relay marks.");
       }
     }
     rank = findRank(board?.traders, handle);
@@ -784,7 +956,8 @@ async function loadPortfolio(input) {
   const mints = [
     ...fomoPositions.map((p) => tokenField(p).address),
     ...fomoHoldings.map((h) => holdingSymbol(h).address),
-    ...onchain.map((h) => h.mint)
+    ...onchain.map((h) => h.mint),
+    ...relayOpen.map((p) => p.mint)
   ].filter((m) => Boolean(m));
   const [markets, solPrice] = await Promise.all([
     fetchDexMarkets(mints, fetchFn),
@@ -797,31 +970,50 @@ async function loadPortfolio(input) {
   }).map(mapClosedTrade).filter((t) => Boolean(t));
   const fromBalances = fomoHoldings.map((h) => mapHoldingToPosition(h, markets)).filter((p) => Boolean(p));
   const fromChain = onchain.map((h) => mapOnchainPosition(h, markets, solPrice)).filter((p) => Boolean(p));
-  const merged = mergePositions(
-    openFromFomo.length ? openFromFomo : fromBalances,
-    fromChain
-  );
+  const fromRelay = relayOpen.map((p) => withMarketMove(p, markets));
+  const holdings = mergePositions(fromChain, fromRelay);
+  const fomoBase = openFromFomo.length ? openFromFomo : fromBalances;
+  const merged = mergePositions(fomoBase, holdings).map((p) => withMarketMove(p, markets));
+  if (onchainOk && fromChain.length && openFromFomo.length > fromChain.length + 3) {
+    warnings.push(
+      `FOMO lists ${openFromFomo.length} open names vs ${fromChain.length} Solana tokens in the wallet \u2014 some FOMO rows can lag exits.`
+    );
+  }
   const { cash, risk } = splitCash(merged);
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
-  const fomoUnrealized = openFromFomo.reduce((s, p) => s + p.unrealizedPnl, 0);
-  const unrealized = fomoUnrealized + livePerpPnl;
+  const hasCostBasis = risk.some((p) => p.hasCostBasis);
+  const unrealized = risk.reduce((s, p) => s + (p.hasCostBasis ? p.unrealizedPnl : p.pnl24hUsd ?? 0), 0) + livePerpPnl;
+  const pnl24h = [...cash, ...risk].reduce((s, p) => s + (p.pnl24hUsd ?? 0), 0) + livePerpPnl;
+  const any24h = [...cash, ...risk].some((p) => p.pnl24hUsd != null);
   const chainTotal = [...cash, ...risk].reduce((s, p) => s + p.sizeUsd, 0);
   const totalEquity = fomoTotalValue && fomoTotalValue > 0 ? fomoTotalValue + (livePerpPnl || 0) : chainTotal || openPositionsValue + cashUsd;
+  const fomoAllTime = user?.pnl?.all ?? (user?.pnlUsd == null ? null : user.pnlUsd);
   const pnlWindows = {
-    h24: user?.pnl?.["24h"] ?? null,
+    h24: user?.pnl?.["24h"] ?? (any24h ? pnl24h : null),
     d7: user?.pnl?.["7d"] ?? null,
     d30: user?.pnl?.["30d"] ?? null,
-    all: user?.pnl?.all ?? user?.pnlUsd ?? null
+    all: fomoAllTime
   };
   const closedStats = statsFromClosed(closed);
-  const realizedAllTime = pnlWindows.all ?? closed.reduce((s, t) => s + t.realizedPnl, 0);
-  const equityCurve = buildEquityCurve(closed, totalEquity, realizedAllTime, unrealized);
+  const closedSum = closed.reduce((s, t) => s + t.realizedPnl, 0);
+  const spotlightRealized = fomoPositions.reduce((s, p) => s + asNumber(p.realizedPnlUsd), 0);
+  const realizedAllTime = fomoAllTime ?? (closed.length ? closedSum : spotlightRealized ? spotlightRealized : null);
+  let equityCurve = buildEquityCurve(closed, totalEquity, realizedAllTime ?? 0, hasCostBasis ? unrealized : 0);
   const peakEquity = Math.max(totalEquity, ...equityCurve.map((p) => p.equity), 0);
+  if (equityCurve.length < 2 && pnlWindows.h24 != null) {
+    const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const yday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    equityCurve = [
+      { date: yday, equity: Math.max(0, totalEquity - pnlWindows.h24), realizedPnl: 0 },
+      { date: today, equity: totalEquity, realizedPnl: realizedAllTime ?? 0 }
+    ];
+  }
   const currentDrawdownPct = drawdownPct(totalEquity, peakEquity);
   const alerts = buildAlerts(totalEquity, cashUsd, risk, currentDrawdownPct);
   const followers = asNumber(user?.followers ?? user?.profile?.followers);
   const avgHold = user?.averageHoldTimeSeconds ?? user?.profile?.averageHoldTimeSeconds;
+  const volumeUsd = user?.volumeUsd ?? user?.totalVolume ?? user?.profile?.totalVolumeUsd ?? null;
   return {
     handle: user?.handle || user?.userHandle || searchHit?.handle || handle,
     displayName: user?.displayName || searchHit?.displayName,
@@ -840,6 +1032,7 @@ async function loadPortfolio(input) {
       realizedPnl7d: pnlWindows.d7 ?? closedStats.realized7d,
       realizedPnl30d: pnlWindows.d30 ?? closedStats.realized30d,
       unrealizedPnl: unrealized,
+      volumeUsd,
       peakEquity,
       currentDrawdownPct,
       winRate: closedStats.winRate,

@@ -1,5 +1,5 @@
 # Active context
 
-Production `https://rxlfomo.vercel.app` loaded the SPA but `/api/portfolio` crashed with FUNCTION_INVOCATION_FAILED (`A server error has occurred`) because `api/portfolio.ts` imported `src/lib/**/*.ts`. Health/defaults worked (no src imports). Fix: bundle the Node handler with esbuild into `api/portfolio.js`. Client `fetch` now tolerates non-JSON error bodies.
+Production `https://rxlfomo.vercel.app` is live. The book was showing $0 unrealized/PnL because FOMO's trade tape is often empty and on-chain rows used mark = entry. Now: spotlight + Relay cost basis, Dex 24h MTM, volume, and a 24h equity stub when there are no closes.
 
-Next: confirm the Vercel redeploy shows @BusyMereDog; trade-journal R-multiples once closed history is flowing.
+Next: optional Helius for faster Solana lists; R-multiples once closed history is stable.

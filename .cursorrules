@@ -6,4 +6,4 @@
 - Cash = SOL + stables. Don't put USDC in the open-risk table.
 - Keep FOMO_API_KEY on the server (`x-fomo-api-key` from the UI is OK). Do not prefix it with VITE_ for production.
 - Vercel Node functions in /api cannot import src/*.ts (FUNCTION_INVOCATION_FAILED). Change server/vercel-portfolio.ts and run npm run build:api so api/portfolio.js stays the self-contained entry.
-- Parse /api responses as text then JSON so HTML/plain-text 500s surface as readable errors.
+- FOMO tape is often empty or stale. Overlay spotlight + Relay cost basis onto the wallet, Dex 24h when there is no entry, and never fake $0 unrealized as a real P&L.

@@ -98,4 +98,68 @@ describe('loadPortfolio', () => {
     expect(snap.source.fomo).toBe(true);
     expect(snap.pnlWindows.d7).toBe(40);
   });
+
+  it('uses Dex 24h marks when FOMO tape is empty', async () => {
+    const mint = 'MintGas11111111111111111111111111111111';
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = typeof init?.body === 'string' ? init.body : '';
+      if (url.includes('dexscreener')) {
+        return jsonResponse({
+          pairs: [
+            {
+              priceUsd: '0.00002',
+              marketCap: 20_000,
+              liquidity: { usd: 14_000 },
+              priceChange: { h24: 25 },
+              volume: { h24: 2000 },
+              baseToken: { address: mint, symbol: 'GAS' },
+            },
+          ],
+        });
+      }
+      if (url.includes('geckoterminal')) {
+        return jsonResponse({
+          data: { attributes: { token_prices: { So11111111111111111111111111111111111111112: '100' } } },
+        });
+      }
+      if (body.includes('getBalance')) {
+        return jsonResponse({ result: { value: 0 } });
+      }
+      if (body.includes('getTokenAccountsByOwner')) {
+        const program = JSON.parse(body).params[1].programId as string;
+        if (program.startsWith('Tokenz')) return jsonResponse({ result: { value: [] } });
+        return jsonResponse({
+          result: {
+            value: [
+              {
+                account: {
+                  data: {
+                    parsed: {
+                      info: {
+                        mint,
+                        tokenAmount: { uiAmount: 1_000_000, decimals: 6 },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        });
+      }
+      return jsonResponse({ available: false, trades: [], holdings: [], swaps: [], bestTrades: [] });
+    }) as unknown as typeof fetch;
+
+    const snap = await loadPortfolio({
+      solanaWallet: 'Wallet111111111111111111111111111111111',
+      fetchFn,
+    });
+    const gas = snap.openPositions.find((p) => p.mint === mint);
+    expect(gas?.sizeUsd).toBeCloseTo(20);
+    expect(gas?.change24hPct).toBe(25);
+    expect(gas?.hasCostBasis).toBe(false);
+    expect(snap.pnlWindows.h24).toBeCloseTo(20 * (25 / 125));
+    expect(snap.equityCurve.length).toBeGreaterThanOrEqual(2);
+  });
 });

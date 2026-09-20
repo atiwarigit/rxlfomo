@@ -9,7 +9,7 @@ export interface FomoUser {
   userHandle?: string;
   displayName?: string;
   userId?: string;
-  pnlUsd?: number;
+  pnlUsd?: number | null;
   pnl?: {
     '24h'?: number;
     '7d'?: number;
@@ -17,6 +17,7 @@ export interface FomoUser {
     all?: number;
   };
   volumeUsd?: number;
+  totalVolume?: number;
   trades?: number;
   numTrades?: number;
   swapCount?: number;
@@ -27,6 +28,9 @@ export interface FomoUser {
   profile?: {
     followers?: number;
     following?: number;
+    swapCount?: number;
+    numTrades?: number;
+    totalVolumeUsd?: number;
     averageHoldTimeSeconds?: number;
     fomoCreatedAt?: string;
     accountAgeDays?: number;
@@ -71,6 +75,7 @@ export interface FomoPosition {
   openedAt?: string;
   closedAt?: string | null;
   thesis?: string;
+  thesisLikes?: number;
   liquidityUsd?: number | null;
   marketCapUsd?: number | null;
   entryMarketCapUsd?: number | null;
@@ -143,4 +148,49 @@ export interface FomoLeaderboardResponse {
   window?: string;
   traders?: FomoLeaderboardTrader[];
   error?: string;
+}
+
+export interface FomoSpotlightResponse {
+  handle?: string;
+  userId?: string;
+  bestTrades?: FomoPosition[];
+  bestTheses?: unknown[];
+  note?: string;
+  error?: string;
+}
+
+export interface FomoRelayToken {
+  address?: string;
+  symbol?: string;
+  amount?: number;
+  usd?: number;
+  usdNow?: number;
+  chainId?: number;
+}
+
+export interface FomoRelaySwap {
+  swapId?: string;
+  chainId?: number;
+  chain?: string;
+  fromChain?: string;
+  toChain?: string;
+  tokenIn?: FomoRelayToken;
+  tokenOut?: FomoRelayToken;
+  status?: string;
+  at?: string;
+  source?: string;
+}
+
+export interface FomoRelaySwapsResponse {
+  key?: string;
+  kind?: string;
+  source?: string;
+  wallet?: string;
+  count?: number;
+  held?: number;
+  swaps?: FomoRelaySwap[];
+  complete?: boolean;
+  moreAvailable?: boolean;
+  error?: string;
+  message?: string;
 }

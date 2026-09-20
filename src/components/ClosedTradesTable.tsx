@@ -11,7 +11,7 @@ export function ClosedTradesTable({ trades, captured, totalOnFomo }: Props) {
   if (!trades.length) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-8 text-center text-sm text-white/50">
-        No closed trades in this pull. FOMO only returns a recent page — add an API key and handle to capture history.
+        No closed trades in this pull. FOMO has not indexed this handle's exits yet — open marks still come from the wallet, Relay, and spotlight.
       </div>
     );
   }
