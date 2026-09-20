@@ -66,6 +66,8 @@ Do not put `FOMO_API_KEY` in a `VITE_` variable if you deploy the frontend publi
 
 Never commit the API key. After the first deploy, `/api/defaults` should report `hasApiKey: true` and the dashboard will auto-load `@BusyMereDog`.
 
+`/api/portfolio` is bundled (`npm run build:api`) so Vercel Node does not import `src/*.ts` at runtime. That script also runs as part of `npm run build`.
+
 ## Project structure
 
 ```
@@ -73,7 +75,7 @@ src/lib/fomo/          FOMO REST client
 src/lib/wallet/        Solana RPC + DexScreener
 src/lib/portfolio/     mapping, risk metrics, loadPortfolio()
 server/plugin.ts       Vite /api/portfolio in dev + preview
-api/                   Vercel serverless copies of the same routes
+api/                   Vercel routes (`portfolio.js` is bundled from `server/vercel-portfolio.ts`)
 ```
 
 ## Risk rules (edit in the Risk panel / `metrics.ts`)

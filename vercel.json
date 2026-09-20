@@ -7,7 +7,7 @@
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "functions": {
-    "api/portfolio.ts": {
+    "api/portfolio.js": {
       "maxDuration": 60
     }
   }

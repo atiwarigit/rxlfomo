@@ -5,3 +5,5 @@
 - Positions endpoint is the source for open/closed trades; `/trades` is deprecated.
 - Cash = SOL + stables. Don't put USDC in the open-risk table.
 - Keep FOMO_API_KEY on the server (`x-fomo-api-key` from the UI is OK). Do not prefix it with VITE_ for production.
+- Vercel Node functions in /api cannot import src/*.ts (FUNCTION_INVOCATION_FAILED). Change server/vercel-portfolio.ts and run npm run build:api so api/portfolio.js stays the self-contained entry.
+- Parse /api responses as text then JSON so HTML/plain-text 500s surface as readable errors.

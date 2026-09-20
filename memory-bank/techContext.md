@@ -6,3 +6,4 @@
 - Solana: publicnode JSON-RPC or Helius `getAssetsByOwner`
 - Prices: DexScreener token pairs, GeckoTerminal for SOL
 - Tests: Vitest (`src/**/*.test.ts`)
+- Vercel `/api/portfolio` is an esbuild ESM bundle (`npm run build:api` → `api/portfolio.js`) so Node does not import `src/*.ts` at runtime

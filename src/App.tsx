@@ -20,6 +20,23 @@ import { compactAddress } from './lib/portfolio/helpers';
 import { formatPct, formatUsd } from './lib/format';
 import type { PortfolioSnapshot } from './types/portfolio';
 
+async function readJson<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  let body: (T & { message?: string; error?: string }) | null = null;
+  try {
+    body = text ? (JSON.parse(text) as T & { message?: string; error?: string }) : null;
+  } catch {
+    throw new Error(text.replace(/\s+/g, ' ').slice(0, 180) || `HTTP ${res.status}`);
+  }
+  if (!res.ok) {
+    throw new Error(body?.message || body?.error || `HTTP ${res.status}`);
+  }
+  if (!body || typeof body !== 'object') {
+    throw new Error('Portfolio API returned an empty response');
+  }
+  return body;
+}
+
 async function fetchPortfolio(cfg: ClientConfig): Promise<PortfolioSnapshot> {
   const params = new URLSearchParams();
   if (cfg.handle) params.set('handle', cfg.handle);
@@ -28,11 +45,7 @@ async function fetchPortfolio(cfg: ClientConfig): Promise<PortfolioSnapshot> {
   const res = await fetch(`/api/portfolio?${params.toString()}`, {
     headers: cfg.apiKey ? { 'x-fomo-api-key': cfg.apiKey } : undefined,
   });
-  const body = (await res.json()) as PortfolioSnapshot & { message?: string; error?: string };
-  if (!res.ok) {
-    throw new Error(body.message || body.error || `HTTP ${res.status}`);
-  }
-  return body;
+  return readJson<PortfolioSnapshot>(res);
 }
 
 function App() {
@@ -46,11 +59,11 @@ function App() {
     void (async () => {
       let cfg = loadClientConfig();
       try {
-        const defaults = (await fetch('/api/defaults').then((r) => r.json())) as {
+        const defaults = await readJson<{
           handle?: string;
           solanaWallet?: string;
           evmWallet?: string;
-        };
+        }>(await fetch('/api/defaults'));
         if (defaults.handle) {
           const leftoverWallet = !cfg.handle;
           cfg = {
