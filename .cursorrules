@@ -1,0 +1,7 @@
+# FOMO dashboard
+
+- Never ship mock PnL as a fallback once live sources are configured. Degrade to wallet-only + warnings.
+- FOMO wallet resolution costs 2,500 credits — cache the profile when adding refresh timers.
+- Positions endpoint is the source for open/closed trades; `/trades` is deprecated.
+- Cash = SOL + stables. Don't put USDC in the open-risk table.
+- Keep FOMO_API_KEY on the server (`x-fomo-api-key` from the UI is OK). Do not prefix it with VITE_ for production.
