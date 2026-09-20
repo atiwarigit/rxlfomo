@@ -1,5 +1,9 @@
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
 
+export const config = {
+  maxDuration: 60,
+};
+
 type Query = Record<string, string | string[] | undefined>;
 
 function first(value: string | string[] | undefined): string {

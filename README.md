@@ -52,6 +52,20 @@ FOMO does not expose a complete trade history. Closed-trade stats use the captur
 
 Do not put `FOMO_API_KEY` in a `VITE_` variable if you deploy the frontend publicly. The Sources panel sends the key as `x-fomo-api-key` to `/api/portfolio` so it is not baked into the JS bundle.
 
+## Deploy on Vercel
+
+1. Import [atiwarigit/rxlfomo](https://github.com/atiwarigit/rxlfomo) in Vercel (or merge this branch to `main` if the project is already linked).
+2. Framework preset: Vite. Output directory: `dist`.
+3. Add environment variables for **Production** and **Preview**:
+
+| Name | Value |
+| --- | --- |
+| `FOMO_HANDLE` | `BusyMereDog` |
+| `FOMO_API_KEY` | your fomoapi.io key (Project → Settings → Environment Variables) |
+| `SOLANA_RPC_URL` | `https://api.mainnet-beta.solana.com` |
+
+Never commit the API key. After the first deploy, `/api/defaults` should report `hasApiKey: true` and the dashboard will auto-load `@BusyMereDog`.
+
 ## Project structure
 
 ```
