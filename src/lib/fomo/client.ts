@@ -2,6 +2,7 @@ import type {
   FomoBalancesResponse,
   FomoLeaderboardResponse,
   FomoPositionsResponse,
+  FomoSearchResponse,
   FomoUser,
 } from './types.ts';
 
@@ -40,10 +41,11 @@ async function getJson<T>(
   fetchFn: typeof fetch,
   url: string,
   apiKey: string,
+  timeoutMs = 45_000,
 ): Promise<T> {
   const res = await fetchFn(url, {
     headers: headers(apiKey),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await res.text();
   let body: unknown = null;
@@ -71,7 +73,16 @@ export function createFomoClient(opts: FomoClientOptions) {
   return {
     resolveUser(handle: string) {
       const h = encodeURIComponent(handle.replace(/^@/, ''));
-      return getJson<FomoUser>(fetchFn, `${base}/v2/users/${h}`, key);
+      return getJson<FomoUser>(fetchFn, `${base}/v2/users/${h}`, key, 90_000);
+    },
+    search(query: string) {
+      const q = encodeURIComponent(query.replace(/^@/, ''));
+      return getJson<FomoSearchResponse>(
+        fetchFn,
+        `${base}/v2/search?q=${q}&type=traders&limit=5`,
+        key,
+        20_000,
+      );
     },
     positions(handle: string, query = 'deep=1&limit=500') {
       const h = encodeURIComponent(handle.replace(/^@/, ''));
@@ -79,6 +90,7 @@ export function createFomoClient(opts: FomoClientOptions) {
         fetchFn,
         `${base}/v2/users/${h}/positions?${query}`,
         key,
+        45_000,
       );
     },
     balances(handle: string) {
@@ -87,6 +99,7 @@ export function createFomoClient(opts: FomoClientOptions) {
         fetchFn,
         `${base}/v2/users/${h}/balances`,
         key,
+        45_000,
       );
     },
     leaderboard(window: '24h' | '7d' | '30d' | 'all' = 'all', limit = 150) {
@@ -94,6 +107,7 @@ export function createFomoClient(opts: FomoClientOptions) {
         fetchFn,
         `${base}/v2/leaderboard/${window}?limit=${limit}`,
         key,
+        30_000,
       );
     },
   };

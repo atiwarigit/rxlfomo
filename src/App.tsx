@@ -43,11 +43,33 @@ function App() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const cfg = loadClientConfig();
-    setConfig(cfg);
-    if (cfg.handle || cfg.solanaWallet) {
-      void refresh(cfg);
-    }
+    void (async () => {
+      let cfg = loadClientConfig();
+      try {
+        const defaults = (await fetch('/api/defaults').then((r) => r.json())) as {
+          handle?: string;
+          solanaWallet?: string;
+          evmWallet?: string;
+        };
+        if (defaults.handle) {
+          const leftoverWallet = !cfg.handle;
+          cfg = {
+            ...cfg,
+            handle: defaults.handle,
+            solanaWallet: leftoverWallet ? defaults.solanaWallet || '' : cfg.solanaWallet,
+            evmWallet: leftoverWallet ? defaults.evmWallet || '' : cfg.evmWallet,
+          };
+        }
+      } catch {
+        // keep local config
+      }
+      setConfig(cfg);
+      if (cfg.handle || cfg.solanaWallet) {
+        void refresh(cfg);
+      } else {
+        setSettingsOpen(true);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

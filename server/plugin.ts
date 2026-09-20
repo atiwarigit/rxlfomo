@@ -71,6 +71,16 @@ function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
       send(res, 200, { ok: true });
       return;
     }
+    if (path === '/api/defaults') {
+      const handle = env.FOMO_HANDLE || env.VITE_FOMO_HANDLE || '';
+      send(res, 200, {
+        handle,
+        hasApiKey: Boolean(env.FOMO_API_KEY || env.VITE_FOMO_API_KEY),
+        solanaWallet: env.SOLANA_WALLET || env.VITE_SOLANA_WALLET || '',
+        evmWallet: env.EVM_WALLET || env.VITE_EVM_WALLET || '',
+      });
+      return;
+    }
     if (path === '/api/portfolio' && (req.method === 'GET' || req.method === 'POST')) {
       void handlePortfolio(req, res, env);
       return;

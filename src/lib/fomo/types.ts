@@ -116,6 +116,22 @@ export interface FomoBalancesResponse {
   message?: string;
 }
 
+export interface FomoSearchTrader {
+  type?: string;
+  handle?: string;
+  displayName?: string;
+  userId?: string;
+  wallets?: FomoWallets;
+}
+
+export interface FomoSearchResponse {
+  query?: string;
+  count?: number;
+  results?: FomoSearchTrader[];
+  traders?: FomoSearchTrader[];
+  error?: string;
+}
+
 export interface FomoLeaderboardTrader {
   rank?: number;
   handle?: string;

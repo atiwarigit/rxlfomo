@@ -1,5 +1,5 @@
 import { createFomoClient, FomoApiError } from '../fomo/client.ts';
-import type { FomoHolding, FomoPosition, FomoUser } from '../fomo/types.ts';
+import type { FomoHolding, FomoPosition, FomoSearchTrader, FomoUser } from '../fomo/types.ts';
 import { fetchDexMarkets, fetchSolPriceUsd, type TokenMarket } from '../wallet/markets.ts';
 import { fetchSolanaHoldings, type OnchainHolding } from '../wallet/solana.ts';
 import {
@@ -240,6 +240,7 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
   const fetchFn = input.fetchFn ?? fetch;
   const warnings: string[] = [];
   let user: FomoUser | null = null;
+  let searchHit: FomoSearchTrader | null = null;
   let fomoPositions: FomoPosition[] = [];
   let fomoHoldings: FomoHolding[] = [];
   let closedTotalOnFomo: number | undefined;
@@ -247,13 +248,46 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
   let fomoTotalValue: number | undefined;
   let fomoOk = false;
   let rank: number | undefined;
+  let solanaWallet = input.solanaWallet?.trim() || undefined;
+  let evmWallet = input.evmWallet?.trim() || undefined;
+
+  let onchainPromise: Promise<OnchainHolding[]> | undefined;
+  const startOnchain = () => {
+    if (onchainPromise || !solanaWallet) return;
+    onchainPromise = fetchSolanaHoldings({
+      owner: solanaWallet,
+      rpcUrl: input.solanaRpcUrl,
+      heliusApiKey: input.heliusApiKey,
+      fetchFn,
+    });
+  };
 
   if (handle && input.apiKey) {
     const client = createFomoClient({ apiKey: input.apiKey, fetchFn });
+    try {
+      const found = await client.search(handle);
+      const rows = found.results ?? found.traders ?? [];
+      searchHit =
+        rows.find(
+          (r) => (r.handle || '').replace(/^@/, '').toLowerCase() === handle.toLowerCase(),
+        ) ?? rows[0] ?? null;
+      if (searchHit?.wallets?.solana) solanaWallet = solanaWallet || searchHit.wallets.solana;
+      if (searchHit?.wallets?.evm) evmWallet = evmWallet || searchHit.wallets.evm;
+      if (searchHit?.handle) fomoOk = true;
+      startOnchain();
+    } catch (err) {
+      if (err instanceof FomoApiError && err.code === 'auth') {
+        warnings.push('FOMO API key rejected (401). Check FOMO_API_KEY.');
+      } else {
+        warnings.push(`Search: ${err instanceof Error ? err.message : 'failed'}`);
+      }
+    }
+
+    const fomoKey = searchHit?.userId || handle;
     const results = await Promise.allSettled([
       client.resolveUser(handle),
-      client.positions(handle),
-      client.balances(handle),
+      client.positions(fomoKey),
+      client.balances(fomoKey),
       client.leaderboard('all'),
     ]);
 
@@ -278,11 +312,16 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     const board = take<Awaited<ReturnType<typeof client.leaderboard>>>(3, 'Leaderboard');
 
     if (user && !user.error) fomoOk = true;
+    if (user?.wallets?.solana) solanaWallet = solanaWallet || user.wallets.solana;
+    if (user?.wallets?.evm || user?.wallets?.ethereum) {
+      evmWallet = evmWallet || user.wallets.evm || user.wallets.ethereum || undefined;
+    }
+    startOnchain();
     if (pos) {
       fomoPositions = pos.positions ?? pos.trades ?? pos.items ?? [];
       closedTotalOnFomo = pos.closedTotalOnFomo;
       if (pos.available === false && !fomoPositions.length) {
-        warnings.push('FOMO has not captured positions for this handle yet.');
+        warnings.push('FOMO has not captured trade history for this handle yet — using on-chain balances.');
       }
     }
     if (bal) {
@@ -290,6 +329,9 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
       fomoTotalValue = bal.totalValueUsd;
       const perp = bal.livePerpPnl;
       livePerpPnl = typeof perp === 'number' ? perp : asNumber(perp?.usd);
+      if (bal.available === false && !fomoHoldings.length) {
+        warnings.push('FOMO holdings feed is empty right now; on-chain mark-to-market is the live book.');
+      }
     }
     rank = findRank(board?.traders, handle);
   } else if (handle && !input.apiKey) {
@@ -298,26 +340,12 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     warnings.push('No FOMO handle set — running wallet / on-chain path only.');
   }
 
-  const solanaWallet =
-    input.solanaWallet?.trim() ||
-    user?.wallets?.solana ||
-    undefined;
-  const evmWallet =
-    input.evmWallet?.trim() ||
-    user?.wallets?.evm ||
-    user?.wallets?.ethereum ||
-    undefined;
-
   let onchain: OnchainHolding[] = [];
   let onchainOk = false;
-  if (solanaWallet) {
+  startOnchain();
+  if (onchainPromise) {
     try {
-      onchain = await fetchSolanaHoldings({
-        owner: solanaWallet,
-        rpcUrl: input.solanaRpcUrl,
-        heliusApiKey: input.heliusApiKey,
-        fetchFn,
-      });
+      onchain = await onchainPromise;
       onchainOk = true;
     } catch (err) {
       warnings.push(
@@ -398,8 +426,8 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
   const avgHold = user?.averageHoldTimeSeconds ?? user?.profile?.averageHoldTimeSeconds;
 
   return {
-    handle: user?.handle || user?.userHandle || handle,
-    displayName: user?.displayName,
+    handle: user?.handle || user?.userHandle || searchHit?.handle || handle,
+    displayName: user?.displayName || searchHit?.displayName,
     wallets: { solana: solanaWallet, evm: evmWallet },
     source: {
       fomo: fomoOk,
