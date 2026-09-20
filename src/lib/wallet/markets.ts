@@ -21,13 +21,9 @@ const DEX_TOKENS = 'https://api.dexscreener.com/latest/dex/tokens';
 
 function pickBestPair(pairs: DexPair[], mint: string): DexPair | undefined {
   const lower = mint.toLowerCase();
-  const relevant = pairs.filter((p) => {
-    const base = p.baseToken?.address?.toLowerCase();
-    const quote = p.quoteToken?.address?.toLowerCase();
-    return base === lower || quote === lower;
-  });
-  const pool = relevant.length ? relevant : pairs;
-  return [...pool].sort(
+  // priceUsd is the base token's USD price — ignore pairs where this mint is only the quote.
+  const relevant = pairs.filter((p) => p.baseToken?.address?.toLowerCase() === lower);
+  return [...relevant].sort(
     (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0),
   )[0];
 }
