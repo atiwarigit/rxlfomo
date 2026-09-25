@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Connect, Plugin, ViteDevServer } from 'vite';
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
+import chatHandler from './vercel-chat.ts';
 
 function readUrl(req: IncomingMessage): URL {
   return new URL(req.url || '/', 'http://localhost');
@@ -64,6 +65,42 @@ async function handlePortfolio(
   }
 }
 
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  return JSON.parse(raw);
+}
+
+async function handleChat(req: IncomingMessage, res: ServerResponse) {
+  try {
+    const body = req.method === 'POST' ? await readJsonBody(req) : {};
+    await chatHandler(
+      { method: req.method, headers: req.headers as Record<string, string | string[] | undefined>, body },
+      {
+        setHeader: (k, v) => {
+          res.setHeader(k, v);
+        },
+        status: (code: number) => ({
+          json: (payload: unknown) => send(res, code, payload),
+          end: () => {
+            res.statusCode = code;
+            res.end();
+          },
+        }),
+      },
+    );
+  } catch (err) {
+    send(res, 400, {
+      error: 'config',
+      message: err instanceof Error ? err.message : 'Invalid chat body',
+    });
+  }
+}
+
 function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
   return (req, res, next) => {
     const path = req.url?.split('?')[0];
@@ -76,6 +113,7 @@ function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
       send(res, 200, {
         handle,
         hasApiKey: Boolean(env.FOMO_API_KEY || env.VITE_FOMO_API_KEY),
+        hasLlmKey: Boolean(env.LLM_API_KEY || env.AI_GATEWAY_API_KEY || env.OPENAI_API_KEY),
         solanaWallet: env.SOLANA_WALLET || env.VITE_SOLANA_WALLET || '',
         evmWallet: env.EVM_WALLET || env.VITE_EVM_WALLET || '',
       });
@@ -83,6 +121,10 @@ function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
     }
     if (path === '/api/portfolio' && (req.method === 'GET' || req.method === 'POST')) {
       void handlePortfolio(req, res, env);
+      return;
+    }
+    if (path === '/api/chat') {
+      void handleChat(req, res);
       return;
     }
     next();

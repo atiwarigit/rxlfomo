@@ -9,6 +9,9 @@ export interface ClientConfig {
   apiKey: string;
   solanaWallet: string;
   evmWallet: string;
+  llmApiKey: string;
+  llmModel: string;
+  llmBaseUrl: string;
 }
 
 export const emptyConfig = (): ClientConfig => ({
@@ -16,6 +19,9 @@ export const emptyConfig = (): ClientConfig => ({
   apiKey: '',
   solanaWallet: '',
   evmWallet: '',
+  llmApiKey: '',
+  llmModel: 'gpt-5.4',
+  llmBaseUrl: '',
 });
 
 export function loadClientConfig(): ClientConfig {
@@ -24,6 +30,9 @@ export function loadClientConfig(): ClientConfig {
     apiKey: '',
     solanaWallet: import.meta.env.VITE_SOLANA_WALLET || '',
     evmWallet: import.meta.env.VITE_EVM_WALLET || '',
+    llmApiKey: '',
+    llmModel: 'gpt-5.4',
+    llmBaseUrl: '',
   };
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
@@ -34,6 +43,9 @@ export function loadClientConfig(): ClientConfig {
       apiKey: parsed.apiKey || '',
       solanaWallet: parsed.solanaWallet || base.solanaWallet,
       evmWallet: parsed.evmWallet || base.evmWallet,
+      llmApiKey: parsed.llmApiKey || '',
+      llmModel: parsed.llmModel || base.llmModel,
+      llmBaseUrl: parsed.llmBaseUrl || '',
     };
   } catch {
     return base;

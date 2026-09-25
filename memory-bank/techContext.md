@@ -6,4 +6,5 @@
 - Solana: publicnode JSON-RPC or Helius `getAssetsByOwner`
 - Prices: DexScreener token pairs, GeckoTerminal for SOL
 - Tests: Vitest (`src/**/*.test.ts`)
-- Vercel `/api/portfolio` is an esbuild ESM bundle (`npm run build:api` → `api/portfolio.js`) so Node does not import `src/*.ts` at runtime
+- Vercel `/api/portfolio` and `/api/chat` are esbuild ESM bundles (`npm run build:api`) so Node does not import `src/*.ts` at runtime
+- Desk chat: `ai` + `@ai-sdk/openai` `generateText`; keys `LLM_API_KEY` / `AI_GATEWAY_API_KEY` / `OPENAI_API_KEY` or `x-llm-api-key`

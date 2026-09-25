@@ -1,0 +1,48 @@
+import type { PortfolioSnapshot } from '../../types/portfolio.ts';
+
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export function compactBook(snap: PortfolioSnapshot): string {
+  const s = snap.summary;
+  const lines: string[] = [
+    `Handle: @${snap.handle || 'unknown'} (${snap.displayName || 'n/a'})`,
+    `Equity: ${n(s.totalEquity)} | Cash: ${n(s.cashUsd)} (${pct(s.cashUsd, s.totalEquity)}) | Open: ${n(s.openPositionsValue)}`,
+    `Unrealized: ${n(s.unrealizedPnl)} | Realized: ${s.realizedPnlAllTime == null ? 'n/a' : n(s.realizedPnlAllTime)} | 24h: ${snap.pnlWindows.h24 == null ? 'n/a' : n(snap.pnlWindows.h24)}`,
+    `Volume: ${s.volumeUsd == null ? 'n/a' : n(s.volumeUsd)} | FOMO trades: ${s.totalTrades} captured closes: ${s.closedTradesCaptured}`,
+    `Drawdown: ${s.currentDrawdownPct.toFixed(1)}% from peak ${n(s.peakEquity)} | Rank: ${s.leaderboardRank ?? 'n/a'} | Followers: ${s.followers}`,
+    `Wallets: SOL ${snap.wallets.solana || '—'} | EVM ${snap.wallets.evm || '—'}`,
+    `Sources: fomo=${snap.source.fomo} onchain=${snap.source.onchain} at ${snap.source.fetchedAt}`,
+  ];
+  if (snap.source.warnings.length) lines.push(`Warnings: ${snap.source.warnings.join(' | ')}`);
+  lines.push('Open names (size, 24h, unrealized, basis, chain):');
+  for (const p of snap.openPositions.slice(0, 16)) {
+    lines.push(
+      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? 'n/a' : p.change24hPct.toFixed(1) + '%'} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? 'yes' : 'no'} ${p.chain}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, ' ').slice(0, 80)}"` : ''}`,
+    );
+  }
+  if (snap.closedTrades.length) {
+    lines.push('Recent closes:');
+    for (const t of snap.closedTrades.slice(0, 6)) {
+      lines.push(`- ${t.symbol} ${n(t.realizedPnl)} ${t.exitDate.slice(0, 10)}`);
+    }
+  }
+  if (snap.alerts.length) {
+    lines.push(`Alerts: ${snap.alerts.map((a) => a.message).join(' | ')}`);
+  }
+  lines.push(
+    'Desk rules: cash floor 20%, single-name cap ~15% once book is large, size down after 8% drawdown, do not invent fills FOMO did not capture.',
+  );
+  return lines.join('\n');
+}
+
+function n(v: number): string {
+  return v.toFixed(2);
+}
+
+function pct(part: number, whole: number): string {
+  if (!whole) return '0%';
+  return `${((part / whole) * 100).toFixed(0)}%`;
+}

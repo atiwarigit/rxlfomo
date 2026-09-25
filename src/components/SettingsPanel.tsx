@@ -4,11 +4,12 @@ import type { ClientConfig } from '../lib/localJournal';
 interface Props {
   config: ClientConfig;
   open: boolean;
+  hasServerLlmKey?: boolean;
   onClose: () => void;
   onSave: (cfg: ClientConfig) => void;
 }
 
-export function SettingsPanel({ config, open, onClose, onSave }: Props) {
+export function SettingsPanel({ config, open, hasServerLlmKey, onClose, onSave }: Props) {
   const [draft, setDraft] = useState(config);
   if (!open) return null;
 
@@ -19,8 +20,8 @@ export function SettingsPanel({ config, open, onClose, onSave }: Props) {
         <h2 className="text-lg font-semibold">Data sources</h2>
         <p className="mt-1 text-sm text-white/50">
           FOMO API (fomoapi.io) for handle → wallets, PnL, trades, and social stats. Your Solana
-          wallet is marked to market on-chain via RPC + DexScreener so paper gains on illiquid
-          names get a second look.
+          wallet is marked to market on-chain via RPC + DexScreener. Attach an OpenAI-compatible LLM
+          key so desk chat can read the live book.
         </p>
 
         <form
@@ -70,6 +71,44 @@ export function SettingsPanel({ config, open, onClose, onSave }: Props) {
               className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs outline-none focus:border-emerald-400"
             />
           </label>
+
+          <div className="border-t border-white/10 pt-4">
+            <h3 className="text-sm font-semibold">Desk LLM</h3>
+            <p className="mt-1 text-xs text-white/40">
+              {hasServerLlmKey
+                ? 'A server key is already attached (LLM_API_KEY / AI_GATEWAY_API_KEY). Pasting a key here overrides it for this browser.'
+                : 'Paste an OpenAI, Vercel AI Gateway, or OpenRouter key. Optional base URL for OpenAI-compatible hosts.'}
+            </p>
+          </div>
+          <label className="block text-sm">
+            <span className="text-white/60">LLM API key</span>
+            <input
+              type="password"
+              value={draft.llmApiKey}
+              onChange={(e) => setDraft({ ...draft, llmApiKey: e.target.value })}
+              placeholder={hasServerLlmKey ? 'Using server key — paste to override' : 'sk-… or gateway key'}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 outline-none focus:border-fuchsia-400"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-white/60">Model</span>
+            <input
+              value={draft.llmModel}
+              onChange={(e) => setDraft({ ...draft, llmModel: e.target.value.trim() })}
+              placeholder="gpt-5.4"
+              className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs outline-none focus:border-fuchsia-400"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-white/60">LLM base URL (optional)</span>
+            <input
+              value={draft.llmBaseUrl}
+              onChange={(e) => setDraft({ ...draft, llmBaseUrl: e.target.value.trim() })}
+              placeholder="https://ai-gateway.vercel.sh/v1 or https://openrouter.ai/api/v1"
+              className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs outline-none focus:border-fuchsia-400"
+            />
+          </label>
+
           <div className="flex gap-2 pt-2">
             <button
               type="submit"

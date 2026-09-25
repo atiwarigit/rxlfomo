@@ -9,6 +9,9 @@
   "functions": {
     "api/portfolio.js": {
       "maxDuration": 60
+    },
+    "api/chat.js": {
+      "maxDuration": 60
     }
   }
 }

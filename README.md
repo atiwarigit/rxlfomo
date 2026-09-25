@@ -7,6 +7,8 @@ Live risk/reward dashboard for [fomo.family](https://fomo.family) trading. It re
 
 A local equity log in the browser compounds daily snapshots so the curve keeps building after each refresh.
 
+The UI is an ops floor: header P&L / volume / cash / open risk / decisions, three hero bags with 24h sparks and last-call bars, a size leaderboard, a decision stream, and a desk chat that can read the live book through an attached LLM.
+
 ## Quick start
 
 ```bash
@@ -18,7 +20,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 — or use **Sources** in the UI to paste handle, API key, and wallets (stored in this browser only).
+Open http://localhost:5173 — or use **Sources** in the UI to paste handle, API key, wallets, and an OpenAI-compatible LLM key (stored in this browser only).
 
 ```bash
 npm test
@@ -49,8 +51,11 @@ FOMO does not expose a complete trade history. Closed-trade stats use the captur
 | `SOLANA_RPC_URL` | server | Defaults to publicnode |
 | `HELIUS_API_KEY` | server | Better Solana asset list + prices |
 | `VITE_FOMO_HANDLE` | client | Optional default handle (not the API key) |
+| `LLM_API_KEY` / `AI_GATEWAY_API_KEY` / `OPENAI_API_KEY` | server | Desk chat (OpenAI-compatible) |
+| `LLM_MODEL` | server | Defaults to `gpt-5.4` |
+| `LLM_BASE_URL` | server | Optional OpenAI-compatible host (AI Gateway, OpenRouter) |
 
-Do not put `FOMO_API_KEY` in a `VITE_` variable if you deploy the frontend publicly. The Sources panel sends the key as `x-fomo-api-key` to `/api/portfolio` so it is not baked into the JS bundle.
+Do not put `FOMO_API_KEY` or LLM keys in a `VITE_` variable if you deploy the frontend publicly. The Sources panel sends the FOMO key as `x-fomo-api-key` and the LLM key as `x-llm-api-key` so they are not baked into the JS bundle.
 
 ## Deploy on Vercel
 
@@ -66,7 +71,7 @@ Do not put `FOMO_API_KEY` in a `VITE_` variable if you deploy the frontend publi
 
 Never commit the API key. After the first deploy, `/api/defaults` should report `hasApiKey: true` and the dashboard will auto-load `@BusyMereDog`.
 
-`/api/portfolio` is bundled (`npm run build:api`) so Vercel Node does not import `src/*.ts` at runtime. That script also runs as part of `npm run build`.
+`/api/portfolio` and `/api/chat` are bundled (`npm run build:api`) so Vercel Node does not import `src/*.ts` at runtime. That script also runs as part of `npm run build`. Chat uses `ai` + `@ai-sdk/openai` (`generateText`, JSON, no streaming). Attach `LLM_API_KEY` (or paste it in Sources) before the desk will answer.
 
 ## Project structure
 
@@ -74,8 +79,10 @@ Never commit the API key. After the first deploy, `/api/defaults` should report 
 src/lib/fomo/          FOMO REST client
 src/lib/wallet/        Solana RPC + DexScreener
 src/lib/portfolio/     mapping, risk metrics, loadPortfolio()
-server/plugin.ts       Vite /api/portfolio in dev + preview
-api/                   Vercel routes (`portfolio.js` is bundled from `server/vercel-portfolio.ts`)
+server/plugin.ts       Vite /api/portfolio and /api/chat in dev + preview
+src/lib/ops/           sparks, decision stream, hero ranking
+src/lib/ai/            compact book + generateText desk chat
+api/                   Vercel routes (`portfolio.js` / `chat.js` bundled from `server/vercel-*.ts`)
 ```
 
 ## Risk rules (edit in the Risk panel / `metrics.ts`)

@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, RefreshCw, Settings2, TrendingUp, Users, Wallet } from 'lucide-react';
+import { Activity, TrendingUp, Wallet } from 'lucide-react';
 import { AlertsBar } from './components/AlertsBar';
+import { ChatPanel } from './components/ChatPanel';
 import { ClosedTradesTable } from './components/ClosedTradesTable';
 import { EquityChart } from './components/EquityChart';
 import { PositionsTable } from './components/PositionsTable';
 import { RiskPanel } from './components/RiskPanel';
 import { SettingsPanel } from './components/SettingsPanel';
-import { StatCard } from './components/StatCard';
+import { DecisionStream } from './components/ops/DecisionStream';
+import { HeaderStrip } from './components/ops/HeaderStrip';
+import { HeroPositionCard } from './components/ops/HeroPositionCard';
+import { SizeBoard } from './components/ops/SizeBoard';
+import { TapeBar } from './components/ops/TapeBar';
 import {
   appendEquityLog,
   emptyConfig,
@@ -16,8 +21,8 @@ import {
   saveClientConfig,
   type ClientConfig,
 } from './lib/localJournal';
-import { compactAddress } from './lib/portfolio/helpers';
-import { formatPct, formatUsd } from './lib/format';
+import { heroSlots } from './lib/ops/heroes';
+import { buildDecisionStream } from './lib/ops/stream';
 import type { PortfolioSnapshot } from './types/portfolio';
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -54,6 +59,7 @@ function App() {
   const [data, setData] = useState<PortfolioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [hasServerLlmKey, setHasServerLlmKey] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -63,7 +69,9 @@ function App() {
           handle?: string;
           solanaWallet?: string;
           evmWallet?: string;
+          hasLlmKey?: boolean;
         }>(await fetch('/api/defaults'));
+        setHasServerLlmKey(Boolean(defaults.hasLlmKey));
         if (defaults.handle) {
           const leftoverWallet = !cfg.handle;
           cfg = {
@@ -119,6 +127,8 @@ function App() {
 
   const summary = data?.summary;
   const needsSetup = !config.handle && !config.solanaWallet && !data;
+  const stream = useMemo(() => (data ? buildDecisionStream(data) : []), [data]);
+  const heroes = useMemo(() => (data ? heroSlots(data) : []), [data]);
 
   const sourceLabel = useMemo(() => {
     if (!data) return 'Not connected';
@@ -129,54 +139,17 @@ function App() {
   }, [data]);
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-white">
-      <header className="border-b border-white/10 bg-black/40 px-6 py-4">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">FOMO Portfolio Dashboard</h1>
-            <p className="text-sm text-white/50">
-              {data?.handle ? `@${data.handle}` : 'Live risk · reward · influence'}
-              {data?.displayName ? ` · ${data.displayName}` : ''}
-              {' · '}
-              {sourceLabel}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-white/60">
-            {data?.wallets.solana && (
-              <span className="font-mono text-xs" title={data.wallets.solana}>
-                SOL {compactAddress(data.wallets.solana)}
-              </span>
-            )}
-            {summary && (
-              <span className="flex items-center gap-1.5">
-                <Users size={16} /> {summary.followers.toLocaleString()} followers
-              </span>
-            )}
-            {summary?.leaderboardRank && (
-              <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-emerald-400">
-                Rank #{summary.leaderboardRank} all-time
-              </span>
-            )}
-            <button
-              onClick={() => void refresh()}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 hover:bg-white/5 disabled:opacity-50"
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 hover:bg-white/15"
-            >
-              <Settings2 size={14} />
-              Sources
-            </button>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-[#07080e] text-white">
+      <HeaderStrip
+        data={data}
+        decisions={stream.length}
+        sourceLabel={sourceLabel}
+        loading={loading}
+        onRefresh={() => void refresh()}
+        onSources={() => setSettingsOpen(true)}
+      />
 
-      <main className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+      <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4">
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
             {error}
@@ -187,10 +160,17 @@ function App() {
           <section className="rounded-xl border border-dashed border-white/20 bg-white/5 p-6">
             <h2 className="text-lg font-semibold">Connect live data</h2>
             <p className="mt-2 max-w-2xl text-sm text-white/60">
-              Mock numbers are gone. Open <strong>Sources</strong>, add your FOMO handle plus a free
-              key from <a className="text-emerald-400 underline" href="https://fomoapi.io/dashboard" target="_blank" rel="noreferrer">fomoapi.io</a>,
-              and/or paste the Solana address linked to the handle. The dashboard will keep a local
-              equity log so the curve compounds across sessions.
+              Open <strong>Sources</strong>, add your FOMO handle plus a free key from{' '}
+              <a
+                className="text-emerald-400 underline"
+                href="https://fomoapi.io/dashboard"
+                target="_blank"
+                rel="noreferrer"
+              >
+                fomoapi.io
+              </a>
+              , and/or paste the Solana address. Attach an OpenAI-compatible LLM key in the same panel
+              so the desk chat can read this book.
             </p>
           </section>
         )}
@@ -209,121 +189,34 @@ function App() {
           <>
             <AlertsBar alerts={data.alerts} />
 
-            <section className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
-              <StatCard
-                label="Total Equity"
-                value={formatUsd(summary.totalEquity, true)}
-                sub="Cash + open positions"
-                trend="neutral"
-              />
-              <StatCard
-                label="Realized PnL"
-                value={
-                  summary.realizedPnlAllTime == null
-                    ? '—'
-                    : formatUsd(summary.realizedPnlAllTime, true)
-                }
-                sub={
-                  summary.volumeUsd != null
-                    ? `Vol ${formatUsd(summary.volumeUsd, true)} · ${summary.totalTrades} trades`
-                    : summary.realizedPnl7d != null
-                      ? `7d ${formatUsd(summary.realizedPnl7d, true)}`
-                      : 'All-time closed'
-                }
-                trend={
-                  summary.realizedPnlAllTime == null
-                    ? 'neutral'
-                    : summary.realizedPnlAllTime >= 0
-                      ? 'up'
-                      : 'down'
-                }
-              />
-              <StatCard
-                label="Unrealized"
-                value={formatUsd(summary.unrealizedPnl, true)}
-                sub={
-                  data.openPositions.some((p) => p.hasCostBasis)
-                    ? 'Cost basis where known, else 24h'
-                    : '24h mark-to-market'
-                }
-                trend={summary.unrealizedPnl >= 0 ? 'up' : 'down'}
-              />
-              <StatCard
-                label="Cash"
-                value={formatUsd(summary.cashUsd, true)}
-                sub={`${summary.totalEquity ? ((summary.cashUsd / summary.totalEquity) * 100).toFixed(0) : 0}% of equity`}
-                trend="neutral"
-              />
-              <StatCard
-                label="Drawdown"
-                value={formatPct(summary.currentDrawdownPct)}
-                sub={`Peak ${formatUsd(summary.peakEquity, true)}`}
-                trend={summary.currentDrawdownPct < -5 ? 'down' : 'neutral'}
-              />
-              <StatCard
-                label="Win Rate"
-                value={
-                  summary.closedTradesCaptured ? `${summary.winRate.toFixed(1)}%` : '—'
-                }
-                sub={
-                  summary.closedTradesCaptured
-                    ? `PF ${summary.profitFactor.toFixed(2)} · ${summary.closedTradesCaptured}/${summary.totalTrades} trades`
-                    : `${summary.totalTrades} FOMO trades · tape not indexed`
-                }
-                trend={
-                  !summary.closedTradesCaptured
-                    ? 'neutral'
-                    : summary.winRate >= 50
-                      ? 'up'
-                      : 'neutral'
-                }
-              />
+            <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="grid gap-3 md:grid-cols-3">
+                {heroes.map((slot) => (
+                  <HeroPositionCard key={`${slot.kind}-${slot.label}-${slot.rank}`} slot={slot} />
+                ))}
+              </div>
+              <div className="flex min-h-0 flex-col gap-3">
+                <SizeBoard data={data} />
+                <DecisionStream events={stream} />
+                <ChatPanel
+                  snapshot={data}
+                  llmApiKey={config.llmApiKey}
+                  llmModel={config.llmModel}
+                  llmBaseUrl={config.llmBaseUrl}
+                  hasServerKey={hasServerLlmKey}
+                  onAttach={() => setSettingsOpen(true)}
+                />
+              </div>
             </section>
 
-            <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <StatCard
-                label="PnL 24h"
-                value={data.pnlWindows.h24 == null ? '—' : formatUsd(data.pnlWindows.h24, true)}
-                sub="Live Dex / Relay marks"
-                trend={
-                  data.pnlWindows.h24 == null ? 'neutral' : data.pnlWindows.h24 >= 0 ? 'up' : 'down'
-                }
-              />
-              <StatCard
-                label="PnL 30d"
-                value={data.pnlWindows.d30 == null ? '—' : formatUsd(data.pnlWindows.d30, true)}
-                trend={
-                  data.pnlWindows.d30 == null ? 'neutral' : data.pnlWindows.d30 >= 0 ? 'up' : 'down'
-                }
-              />
-              <StatCard
-                label="Avg hold"
-                value={
-                  data.influence.averageHoldTimeHours != null
-                    ? `${(data.influence.averageHoldTimeHours / 24).toFixed(1)}d`
-                    : '—'
-                }
-                sub="FOMO average"
-              />
-              <StatCard
-                label="Account age"
-                value={
-                  data.influence.accountAgeDays != null
-                    ? `${data.influence.accountAgeDays}d`
-                    : '—'
-                }
-                sub={data.wallets.evm ? `EVM ${compactAddress(data.wallets.evm)}` : 'FOMO profile'}
-              />
-            </section>
+            <TapeBar data={data} />
 
-            <section className="grid gap-6 lg:grid-cols-3">
-              <div className="rounded-xl border border-white/10 bg-white/5 p-4 lg:col-span-2">
+            <section className="grid gap-4 lg:grid-cols-3">
+              <div className="rounded-2xl border border-white/10 bg-[#0d0f18] p-4 lg:col-span-2">
                 <div className="mb-3 flex items-center gap-2">
                   <TrendingUp size={18} className="text-emerald-400" />
-                  <h2 className="font-semibold">Equity Curve</h2>
-                  <span className="text-xs text-white/40">
-                    Live 24h mark + local daily snapshots
-                  </span>
+                  <h2 className="font-semibold">Equity curve</h2>
+                  <span className="text-xs text-white/40">Live 24h mark + local daily snapshots</span>
                 </div>
                 {data.equityCurve.length > 1 ? (
                   <EquityChart data={data.equityCurve} />
@@ -340,14 +233,11 @@ function App() {
               <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Wallet size={18} className="text-sky-400" />
-                  <h2 className="font-semibold">Open Positions</h2>
+                  <h2 className="font-semibold">Open positions</h2>
                   <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs">
                     {data.openPositions.length}
                   </span>
                 </div>
-                <p className="text-sm text-white/50">
-                  Total open: {formatUsd(summary.openPositionsValue)}
-                </p>
               </div>
               <PositionsTable positions={data.openPositions} totalEquity={summary.totalEquity} />
             </section>
@@ -365,8 +255,8 @@ function App() {
             </section>
 
             <p className="text-center text-xs text-white/30">
-              Last fetch {new Date(data.source.fetchedAt).toLocaleString()} · FOMO numbers are
-              cross-checked against wallet mark-to-market when an address is available.
+              Last fetch {new Date(data.source.fetchedAt).toLocaleString()} · 24h sparks are linear Dex
+              moves, not tick charts. Chat sees this snapshot only.
             </p>
           </>
         )}
@@ -376,6 +266,7 @@ function App() {
         key={`${config.handle}-${settingsOpen}`}
         config={config}
         open={settingsOpen}
+        hasServerLlmKey={hasServerLlmKey}
         onClose={() => setSettingsOpen(false)}
         onSave={(cfg) => {
           saveClientConfig(cfg);
