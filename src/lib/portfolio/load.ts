@@ -530,7 +530,7 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
       fomo: fomoOk,
       onchain: onchainOk,
       fetchedAt: new Date().toISOString(),
-      warnings,
+      warnings: [...new Set(warnings)],
     },
     summary: {
       totalEquity,

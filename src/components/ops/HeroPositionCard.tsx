@@ -17,6 +17,7 @@ interface Props {
 export function HeroPositionCard({ slot }: Props) {
   const theme = THEMES[(slot.rank - 1) % THEMES.length];
   const p = slot.position;
+  const idle = slot.kind === 'idle';
   const chg = p?.change24hPct;
   const pnl24 = p?.pnl24hUsd;
   const deltaUsd = p ? (p.hasCostBasis ? p.unrealizedPnl : (pnl24 ?? 0)) : 0;
@@ -27,11 +28,13 @@ export function HeroPositionCard({ slot }: Props) {
     : slot.equity
       ? (slot.sizeUsd / slot.equity) * 100
       : 0;
-  const spark = sparklineFromMove(p?.currentPrice || slot.sizeUsd || 1, p ? chg : 0);
+  const spark = sparklineFromMove(p?.currentPrice || (idle ? 1 : slot.sizeUsd || 1), p ? chg : 0);
   const chart = spark.map((v, i) => ({ i, v }));
   const call = p
     ? lastCallForPosition(p)
-    : lastCallForCash(slot.equity ? (slot.sizeUsd / slot.equity) * 100 : 0);
+    : idle
+      ? { action: 'IDLE', bars: [{ label: 'IDLE', pct: 70 }, { label: 'WAIT', pct: 20 }, { label: 'NO_NAME', pct: 10 }] }
+      : lastCallForCash(slot.equity ? (slot.sizeUsd / slot.equity) * 100 : 0);
   const gid = `hero-fill-${slot.rank}-${slot.label}`;
   const up = deltaUsd >= 0;
 
@@ -68,10 +71,12 @@ export function HeroPositionCard({ slot }: Props) {
       </div>
 
       <div className="mt-3">
-        <p className="font-mono text-3xl font-semibold tracking-tight">{formatUsd(slot.sizeUsd)}</p>
-        <p className={cn('mt-0.5 text-sm', up ? 'text-emerald-400' : 'text-rose-400')}>
-          {formatSignedUsd(deltaUsd)}{' '}
-          <span className="text-white/40">({formatPct(deltaPct)})</span>
+        <p className="font-mono text-3xl font-semibold tracking-tight">
+          {idle ? '—' : formatUsd(slot.sizeUsd)}
+        </p>
+        <p className={cn('mt-0.5 text-sm', idle ? 'text-white/35' : up ? 'text-emerald-400' : 'text-rose-400')}>
+          {idle ? 'empty desk' : `${formatSignedUsd(deltaUsd)} `}
+          {idle ? null : <span className="text-white/40">({formatPct(deltaPct)})</span>}
         </p>
       </div>
 
@@ -93,7 +98,7 @@ export function HeroPositionCard({ slot }: Props) {
         </div>
       ) : (
         <p className={cn('mt-3 text-[11px] font-semibold uppercase tracking-[0.14em]', theme.text)}>
-          Flat · cash
+          {idle ? 'No name' : 'Flat · cash'}
         </p>
       )}
 

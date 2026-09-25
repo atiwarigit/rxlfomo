@@ -72,6 +72,11 @@ describe('heroSlots', () => {
     expect(slots[2]?.kind).toBe('cash');
     expect(slots[2]?.sizeUsd).toBe(250);
   });
+
+  it('pads idle desks so the floor stays three-wide', () => {
+    const slots = heroSlots(snap({ openPositions: [] }));
+    expect(slots.map((s) => s.kind)).toEqual(['cash', 'idle', 'idle']);
+  });
 });
 
 describe('sizeBoard', () => {

@@ -2,7 +2,7 @@ import type { PortfolioSnapshot, Position } from '../../types/portfolio.ts';
 
 export interface HeroSlot {
   rank: number;
-  kind: 'position' | 'cash';
+  kind: 'position' | 'cash' | 'idle';
   position?: Position;
   sizeUsd: number;
   equity: number;
@@ -29,6 +29,15 @@ export function heroSlots(snap: PortfolioSnapshot, n = 3): HeroSlot[] {
       equity,
       label: 'CASH',
       subtitle: 'dry powder',
+    });
+  }
+  while (raw.length < n) {
+    raw.push({
+      kind: 'idle',
+      sizeUsd: 0,
+      equity,
+      label: 'IDLE',
+      subtitle: 'no name',
     });
   }
   const lead = raw[0]?.sizeUsd ?? 0;

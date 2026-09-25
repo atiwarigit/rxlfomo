@@ -177,7 +177,7 @@ function App() {
 
         {data?.source.warnings.length ? (
           <div className="space-y-1">
-            {data.source.warnings.map((w) => (
+            {[...new Set(data.source.warnings)].map((w) => (
               <p key={w} className="text-xs text-amber-200/80">
                 {w}
               </p>

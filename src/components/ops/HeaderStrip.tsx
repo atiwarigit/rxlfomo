@@ -85,7 +85,7 @@ export function HeaderStrip({ data, decisions, sourceLabel, loading, onRefresh, 
           label="Cash"
           value={s ? formatUsd(s.cashUsd, true) : '—'}
           sub={`${cashPct.toFixed(0)}% of equity`}
-          tone={s && cashPct < 20 ? 'down' : 'neutral'}
+          tone={s && s.totalEquity > 0 && cashPct < 20 ? 'down' : 'neutral'}
         />
         <Cell
           label="Open risk"

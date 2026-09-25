@@ -1022,7 +1022,7 @@ async function loadPortfolio(input) {
       fomo: fomoOk,
       onchain: onchainOk,
       fetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      warnings
+      warnings: [...new Set(warnings)]
     },
     summary: {
       totalEquity,
