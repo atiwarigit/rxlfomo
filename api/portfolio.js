@@ -687,7 +687,26 @@ function swapsFromRelayRequests(requests) {
   const evmWallet = [...recipients.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   return { swaps, evmWallet, truncated: false };
 }
+var HISTORY_TTL_MS = 3 * 6e4;
+var historyCache = /* @__PURE__ */ new Map();
 async function fetchRelayHistory(user, fetchFn = fetch, maxPages = 8) {
+  const key2 = user.toLowerCase();
+  const cached = historyCache.get(key2);
+  const fresh = cached && Date.now() - cached.at < HISTORY_TTL_MS;
+  if (fresh && !cached.history.rateLimited) return cached.history;
+  try {
+    const history = await fetchRelayPages(user, fetchFn, maxPages);
+    if (cached && history.rateLimited && cached.history.swaps.length > history.swaps.length) {
+      return cached.history;
+    }
+    historyCache.set(key2, { at: Date.now(), history });
+    return history;
+  } catch (err) {
+    if (cached) return cached.history;
+    throw err;
+  }
+}
+async function fetchRelayPages(user, fetchFn, maxPages) {
   const all = [];
   let continuation;
   let pages = 0;
@@ -706,7 +725,7 @@ async function fetchRelayHistory(user, fetchFn = fetch, maxPages = 8) {
     pages += 1;
   } while (continuation && pages < maxPages);
   const history = swapsFromRelayRequests(all);
-  return { ...history, truncated: stoppedEarly || Boolean(continuation) };
+  return { ...history, truncated: stoppedEarly || Boolean(continuation), rateLimited: stoppedEarly };
 }
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function fetchPage(url, fetchFn) {

@@ -30,6 +30,7 @@ export interface RelayHistory {
   swaps: FomoRelaySwap[];
   evmWallet?: string;
   truncated: boolean;
+  rateLimited?: boolean;
 }
 
 function chainName(chainId?: number): string | undefined {
@@ -85,11 +86,37 @@ export function swapsFromRelayRequests(requests: RelayRequest[]): RelayHistory {
   return { swaps, evmWallet, truncated: false };
 }
 
+const HISTORY_TTL_MS = 3 * 60_000;
+const historyCache = new Map<string, { at: number; history: RelayHistory }>();
+
 /** Public Relay history for a wallet — no FOMO credits needed. */
 export async function fetchRelayHistory(
   user: string,
   fetchFn: typeof fetch = fetch,
   maxPages = 8,
+): Promise<RelayHistory> {
+  const key = user.toLowerCase();
+  const cached = historyCache.get(key);
+  const fresh = cached && Date.now() - cached.at < HISTORY_TTL_MS;
+  if (fresh && !cached.history.rateLimited) return cached.history;
+  try {
+    const history = await fetchRelayPages(user, fetchFn, maxPages);
+    // A rate-limited partial read must not replace a fuller recent one.
+    if (cached && history.rateLimited && cached.history.swaps.length > history.swaps.length) {
+      return cached.history;
+    }
+    historyCache.set(key, { at: Date.now(), history });
+    return history;
+  } catch (err) {
+    if (cached) return cached.history;
+    throw err;
+  }
+}
+
+async function fetchRelayPages(
+  user: string,
+  fetchFn: typeof fetch,
+  maxPages: number,
 ): Promise<RelayHistory> {
   const all: RelayRequest[] = [];
   let continuation: string | undefined;
@@ -109,7 +136,7 @@ export async function fetchRelayHistory(
     pages += 1;
   } while (continuation && pages < maxPages);
   const history = swapsFromRelayRequests(all);
-  return { ...history, truncated: stoppedEarly || Boolean(continuation) };
+  return { ...history, truncated: stoppedEarly || Boolean(continuation), rateLimited: stoppedEarly };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
