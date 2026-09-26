@@ -20,6 +20,7 @@ export interface TokenMarket {
   volume24hUsd?: number;
   symbol?: string;
   name?: string;
+  quoteSymbol?: string;
 }
 
 const DEX_TOKENS = 'https://api.dexscreener.com/latest/dex/tokens';
@@ -66,6 +67,7 @@ export async function fetchDexMarkets(
           volume24hUsd: Number(best.volume?.h24) || undefined,
           symbol: isBase ? best.baseToken?.symbol : best.quoteToken?.symbol,
           name: isBase ? best.baseToken?.name : best.quoteToken?.name,
+          quoteSymbol: isBase ? best.quoteToken?.symbol : best.baseToken?.symbol,
         };
         out.set(mint, row);
         out.set(mint.toLowerCase(), row);

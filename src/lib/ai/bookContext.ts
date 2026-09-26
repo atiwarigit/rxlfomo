@@ -21,7 +21,7 @@ export function compactBook(snap: PortfolioSnapshot): string {
   lines.push('Open names (size, 24h, unrealized, basis, chain, launchpad, narratives, paired vs):');
   for (const p of snap.openPositions.slice(0, 16)) {
     lines.push(
-      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? 'n/a' : p.change24hPct.toFixed(1) + '%'} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? 'yes' : 'no'} ${p.chain} pad=${p.launchpad || '?'} story=${(p.narratives || []).join('/') || '?'}${p.quoteSymbol ? ` vs=${p.quoteSymbol}` : ''}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, ' ').slice(0, 80)}"` : ''}`,
+      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? 'n/a' : p.change24hPct.toFixed(1) + '%'} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? 'yes' : 'no'} ${p.chain} pad=${p.launchpad || '?'} story=${(p.narratives || []).join('/') || '?'}${p.quoteSymbol ? ` vs=${p.quoteSymbol}` : ''}${p.strategy && p.strategy !== 'trade' ? ` strategy=${p.strategy}${p.dripPays ? ` pays=${p.dripPays}` : ''}${p.dripFrom?.length ? ` from=${p.dripFrom.join('/')}` : ''}${p.dripPerDayUsd ? ` drip/day~${n(p.dripPerDayUsd)}` : ''}` : ''}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, ' ').slice(0, 80)}"` : ''}`,
     );
   }
   const pads = launchpadRotation(snap);

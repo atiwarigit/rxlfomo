@@ -142,7 +142,8 @@ async function fetchDexMarkets(mints, fetchFn = fetch) {
             change24hPct: Number.isFinite(change24hPct) ? change24hPct : void 0,
             volume24hUsd: Number(best.volume?.h24) || void 0,
             symbol: isBase ? best.baseToken?.symbol : best.quoteToken?.symbol,
-            name: isBase ? best.baseToken?.name : best.quoteToken?.name
+            name: isBase ? best.baseToken?.name : best.quoteToken?.name,
+            quoteSymbol: isBase ? best.quoteToken?.symbol : best.baseToken?.symbol
           };
           out.set(mint, row);
           out.set(mint.toLowerCase(), row);
@@ -939,10 +940,12 @@ async function fetchTokenMeta(requests, fetchFn = fetch) {
     for (let i = 0; i < list.length; i += 30) {
       const chunk = list.slice(i, i + 30);
       try {
-        const res = await fetchFn(
-          `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(",")}?include=top_pools`,
-          { signal: AbortSignal.timeout(12e3), headers: { accept: "application/json" } }
-        );
+        const url = `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(",")}?include=top_pools`;
+        let res = await fetchFn(url, { signal: AbortSignal.timeout(12e3), headers: { accept: "application/json" } });
+        for (let attempt = 1; res.status === 429 && attempt <= 2; attempt++) {
+          await new Promise((r) => setTimeout(r, 2500 * attempt));
+          res = await fetchFn(url, { signal: AbortSignal.timeout(12e3), headers: { accept: "application/json" } });
+        }
         if (!res.ok) continue;
         const body = await res.json();
         const pools = new Map((body.included ?? []).map((p) => [p.id, p]));
@@ -964,6 +967,168 @@ async function fetchTokenMeta(requests, fetchFn = fetch) {
     const launchpad = launchpadFromMint(r.address);
     if (launchpad) {
       out.set(addr, { launchpad, narratives: narrativesFor({ symbol: r.symbol }) });
+    }
+  }
+  return out;
+}
+
+// src/lib/wallet/drip.ts
+var RPC_URLS = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
+var DRIP_TTL_MS = 10 * 6e4;
+function classifyTx(tx, owner, mint) {
+  const keys = tx.transaction.message.accountKeys.map((k) => k.pubkey);
+  const payer = keys[0] || "";
+  const meta = tx.meta;
+  if (!meta || meta.err) return { kind: "none", amount: 0, payer, recipients: 0 };
+  const deltas = /* @__PURE__ */ new Map();
+  const note = (rows, sign) => {
+    for (const b of rows ?? []) {
+      const k = `${b.mint}|${b.owner ?? ""}`;
+      deltas.set(k, (deltas.get(k) ?? 0) + sign * Number(b.uiTokenAmount.uiAmount ?? 0));
+    }
+  };
+  note(meta.preTokenBalances, -1);
+  note(meta.postTokenBalances, 1);
+  let mine = 0;
+  let spentOther = false;
+  let gainedOther = false;
+  let recipients = 0;
+  for (const [k, d] of deltas) {
+    const [m, o] = k.split("|");
+    if (m === mint && d > 1e-12) recipients += 1;
+    if (o !== owner || Math.abs(d) < 1e-12) continue;
+    if (m === mint) mine += d;
+    else if (d < 0) spentOther = true;
+    else gainedOther = true;
+  }
+  const i = keys.indexOf(owner);
+  if (i >= 0) {
+    const lamports = (meta.postBalances[i] ?? 0) - (meta.preBalances[i] ?? 0);
+    if (lamports < -1e5) spentOther = true;
+    if (lamports > 1e5) gainedOther = true;
+  }
+  if (mine > 0) return { kind: spentOther ? "buy" : "receipt", amount: mine, payer, recipients };
+  if (mine < 0) return { kind: gainedOther ? "sell" : "out", amount: -mine, payer, recipients };
+  return { kind: "none", amount: 0, payer, recipients };
+}
+function summarize(mint, rows) {
+  const stats = {
+    mint,
+    kind: "trade",
+    receipts: 0,
+    receivedAmount: 0,
+    buys: 0,
+    boughtAmount: 0,
+    sells: 0,
+    soldAmount: 0,
+    windowDays: 0,
+    payers: []
+  };
+  const payers = /* @__PURE__ */ new Map();
+  let oldest = Infinity;
+  for (const { cls, at } of rows) {
+    if (at) oldest = Math.min(oldest, at * 1e3);
+    if (cls.kind === "receipt") {
+      stats.receipts += 1;
+      stats.receivedAmount += cls.amount;
+      payers.set(cls.payer, (payers.get(cls.payer) ?? 0) + 1);
+    } else if (cls.kind === "buy") {
+      stats.buys += 1;
+      stats.boughtAmount += cls.amount;
+    } else if (cls.kind === "sell" || cls.kind === "out") {
+      stats.sells += 1;
+      stats.soldAmount += cls.amount;
+    }
+  }
+  stats.windowDays = Number.isFinite(oldest) ? Math.max(1 / 24, (Date.now() - oldest) / 864e5) : 0;
+  stats.payers = [...payers.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 5);
+  if (stats.receipts >= 2) stats.kind = stats.buys > 0 ? "mixed" : "drip";
+  return stats;
+}
+async function rpcBatch(calls, fetchFn) {
+  const body = JSON.stringify(calls.map((c, id) => ({ jsonrpc: "2.0", id, method: c.method, params: c.params })));
+  let lastErr;
+  for (const url of RPC_URLS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetchFn(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(2e4)
+        });
+        if (res.status === 429) {
+          lastErr = new Error("RPC 429");
+          await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) throw new Error(`RPC ${res.status}`);
+        const rows = await res.json();
+        const out = calls.map(() => null);
+        for (const r of Array.isArray(rows) ? rows : []) out[r.id] = r.result ?? null;
+        return out;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Solana RPC batch failed");
+}
+var cache2 = /* @__PURE__ */ new Map();
+async function analyzeMint(owner, mint, fetchFn, sigLimit) {
+  const key2 = `${owner}:${mint}`;
+  const hit = cache2.get(key2);
+  if (hit && Date.now() - hit.at < DRIP_TTL_MS) return hit.stats;
+  const [accts] = await rpcBatch(
+    [{ method: "getTokenAccountsByOwner", params: [owner, { mint }, { encoding: "jsonParsed" }] }],
+    fetchFn
+  );
+  const account = [...accts?.value ?? []].sort(
+    (a, b) => Number(b.account.data.parsed.info.tokenAmount.uiAmount ?? 0) - Number(a.account.data.parsed.info.tokenAmount.uiAmount ?? 0)
+  )[0]?.pubkey;
+  if (!account) return summarize(mint, []);
+  const [sigs] = await rpcBatch(
+    [{ method: "getSignaturesForAddress", params: [account, { limit: sigLimit }] }],
+    fetchFn
+  );
+  const rows = [];
+  const list = sigs ?? [];
+  for (let i = 0; i < list.length; i += 25) {
+    const chunk = list.slice(i, i + 25);
+    const txs = await rpcBatch(
+      chunk.map((s) => ({
+        method: "getTransaction",
+        params: [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
+      })),
+      fetchFn
+    );
+    txs.forEach((tx, j) => {
+      if (tx) rows.push({ cls: classifyTx(tx, owner, mint), at: tx.blockTime ?? chunk[j].blockTime });
+    });
+  }
+  const stats = summarize(mint, rows);
+  cache2.set(key2, { at: Date.now(), stats });
+  return stats;
+}
+async function analyzeDrips(owner, mints, fetchFn = fetch, sigLimit = 25) {
+  const out = /* @__PURE__ */ new Map();
+  const queue = [...new Set(mints)];
+  const failed = [];
+  const worker = async () => {
+    for (let mint = queue.shift(); mint; mint = queue.shift()) {
+      try {
+        out.set(mint, await analyzeMint(owner, mint, fetchFn, sigLimit));
+      } catch {
+        failed.push(mint);
+      }
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  for (const mint of failed) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      out.set(mint, await analyzeMint(owner, mint, fetchFn, sigLimit));
+    } catch {
     }
   }
   return out;
@@ -1214,7 +1379,7 @@ function findRank(traders, handle) {
   const h = handle.replace(/^@/, "").toLowerCase();
   return traders?.find((t) => (t.handle || "").replace(/^@/, "").toLowerCase() === h)?.rank;
 }
-async function tagLaunchpads(open, closed, fetchFn) {
+async function tagLaunchpads(open, closed, markets, fetchFn) {
   const requests = [...open, ...closed].filter((p) => p.mint).map((p) => ({ address: p.mint, chain: p.chain, symbol: p.symbol }));
   let meta = /* @__PURE__ */ new Map();
   try {
@@ -1223,12 +1388,63 @@ async function tagLaunchpads(open, closed, fetchFn) {
   }
   for (const row of [...open, ...closed]) {
     const m = row.mint ? meta.get(row.mint.toLowerCase()) : void 0;
-    if (!m) continue;
+    if (!m) {
+      const quote = marketFor(row.mint, markets)?.quoteSymbol;
+      if (!quote) continue;
+      const pad = pairLaunch(quote);
+      if (pad) {
+        row.launchpad = pad.label;
+        row.launchpadId = pad.id;
+      }
+      row.narratives = narrativesFor({ symbol: row.symbol, quote });
+      if ("currentPrice" in row) row.quoteSymbol = quote;
+      continue;
+    }
     row.launchpad = m.launchpad.label;
     row.launchpadId = m.launchpad.id;
     row.narratives = m.narratives;
     if ("currentPrice" in row) row.quoteSymbol = m.quote;
   }
+}
+function symbolKey(s) {
+  return (s || "").toLowerCase().replace(/^\$/, "");
+}
+function sameAsset(a, b) {
+  const x = symbolKey(a);
+  const y = symbolKey(b);
+  return Boolean(x && y) && (x === y || x === `w${y}` || `w${x}` === y);
+}
+async function tagDrips(open, owner, fetchFn, analyze = analyzeDrips) {
+  const sol = open.filter((p) => p.chain === "solana" && p.mint);
+  const payersOf = (reward) => sol.filter((t) => t !== reward && sameAsset(t.quoteSymbol, reward.symbol));
+  const candidates = sol.filter((p) => payersOf(p).length > 0).sort((a, b) => b.sizeUsd - a.sizeUsd).slice(0, 6);
+  let stats = /* @__PURE__ */ new Map();
+  if (candidates.length) {
+    try {
+      stats = await analyze(owner, candidates.map((p) => p.mint), fetchFn);
+    } catch {
+    }
+  }
+  for (const reward of candidates) {
+    const s = stats.get(reward.mint);
+    if (!s || s.kind === "trade") continue;
+    const unit = reward.amount && reward.amount > 0 ? reward.sizeUsd / reward.amount : reward.currentPrice;
+    const receivedUsd = s.receivedAmount * (unit || 0);
+    const perDay = s.windowDays > 0 ? receivedUsd / s.windowDays : 0;
+    const sources = payersOf(reward);
+    reward.strategy = "drip-reward";
+    reward.dripReceipts = s.receipts;
+    reward.dripReceivedUsd = receivedUsd;
+    reward.dripPerDayUsd = perDay;
+    reward.dripFrom = sources.map((t) => t.symbol);
+    const total = sources.reduce((sum, t) => sum + t.sizeUsd, 0) || 1;
+    for (const t of sources) {
+      t.strategy = "drip-pair";
+      t.dripPays = reward.symbol;
+      t.dripPerDayUsd = (t.dripPerDayUsd ?? 0) + perDay * (t.sizeUsd / total);
+    }
+  }
+  for (const p of open) p.strategy = p.strategy ?? "trade";
 }
 async function loadPortfolio(input) {
   const handle = input.handle?.replace(/^@/, "").trim();
@@ -1410,7 +1626,8 @@ async function loadPortfolio(input) {
     );
   }
   const { cash, risk } = splitCash(merged);
-  await tagLaunchpads(risk, closed, fetchFn);
+  await tagLaunchpads(risk, closed, markets, fetchFn);
+  if (solanaWallet && onchainOk) await tagDrips(risk, solanaWallet, fetchFn);
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
   const hasCostBasis = risk.some((p) => p.hasCostBasis);

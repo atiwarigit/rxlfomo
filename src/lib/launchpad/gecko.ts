@@ -96,10 +96,12 @@ export async function fetchTokenMeta(
     for (let i = 0; i < list.length; i += 30) {
       const chunk = list.slice(i, i + 30);
       try {
-        const res = await fetchFn(
-          `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(',')}?include=top_pools`,
-          { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } },
-        );
+        const url = `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(',')}?include=top_pools`;
+        let res = await fetchFn(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } });
+        for (let attempt = 1; res.status === 429 && attempt <= 2; attempt++) {
+          await new Promise((r) => setTimeout(r, 2500 * attempt));
+          res = await fetchFn(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } });
+        }
         if (!res.ok) continue;
         const body = (await res.json()) as { data?: GtToken[]; included?: GtPool[] };
         const pools = new Map((body.included ?? []).map((p) => [p.id, p]));

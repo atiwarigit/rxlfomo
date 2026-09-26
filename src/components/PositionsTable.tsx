@@ -61,6 +61,18 @@ export function PositionsTable({ positions, totalEquity }: Props) {
                           {n}
                         </span>
                       ))}
+                      {p.strategy === 'drip-reward' && (
+                        <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-200">
+                          drip from {p.dripFrom?.join(', ') || 'pairs'}
+                          {p.dripPerDayUsd ? ` · ~${formatUsd(p.dripPerDayUsd)}/day` : ''}
+                        </span>
+                      )}
+                      {p.strategy === 'drip-pair' && (
+                        <span className="rounded bg-sky-400/15 px-1.5 py-0.5 text-[10px] text-sky-200">
+                          drip pair · pays {p.dripPays}
+                          {p.dripPerDayUsd ? ` ~${formatUsd(p.dripPerDayUsd)}/day` : ''}
+                        </span>
+                      )}
                       {p.quoteSymbol && (
                         <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/40">
                           vs {p.quoteSymbol}

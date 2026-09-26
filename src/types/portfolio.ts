@@ -35,6 +35,14 @@ export interface Position {
   launchpadId?: string;
   narratives?: string[];
   quoteSymbol?: string;
+  /** drip-reward: received as holder drip · drip-pair: held to earn drip · trade: bought as an active trade */
+  strategy?: 'drip-reward' | 'drip-pair' | 'trade';
+  dripReceipts?: number;
+  dripReceivedUsd?: number;
+  dripPerDayUsd?: number;
+  /** For drip pairs: the token they pay out; for rewards: the pairs paying it. */
+  dripPays?: string;
+  dripFrom?: string[];
 }
 
 export interface ClosedTrade {

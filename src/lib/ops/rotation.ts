@@ -14,6 +14,8 @@ export interface RotationRow {
   wins: number;
   /** Open unrealized + realized: the "is this pad paying me" number. */
   totalPnlUsd: number;
+  /** Estimated drip income per day attributed to this bucket. */
+  dripPerDayUsd: number;
   symbols: string[];
 }
 
@@ -22,6 +24,17 @@ type Keyer = (row: Position | ClosedTrade) => { key: string; label: string }[];
 const byLaunchpad: Keyer = (row) => [
   { key: row.launchpadId || 'unknown', label: row.launchpad || 'Unknown' },
 ];
+
+const STRATEGY_LABEL: Record<string, string> = {
+  'drip-pair': 'Drip pairs (held for drip)',
+  'drip-reward': 'Drip received',
+  trade: 'Active trades',
+};
+
+const byStrategy: Keyer = (row) => {
+  const key = ('strategy' in row && row.strategy) || 'trade';
+  return [{ key, label: STRATEGY_LABEL[key] ?? key }];
+};
 
 const byNarrative: Keyer = (row) => {
   const tags = row.narratives?.length ? row.narratives : ['Untagged'];
@@ -45,6 +58,7 @@ function rollup(open: Position[], closed: ClosedTrade[], keyer: Keyer): Rotation
       closes: 0,
       wins: 0,
       totalPnlUsd: 0,
+      dripPerDayUsd: 0,
       symbols: [] as string[],
       moveWeight: 0,
       moveSum: 0,
@@ -60,6 +74,8 @@ function rollup(open: Position[], closed: ClosedTrade[], keyer: Keyer): Rotation
       r.sizeUsd += p.sizeUsd;
       r.unrealizedUsd += p.hasCostBasis ? p.unrealizedPnl : (p.pnl24hUsd ?? 0);
       r.pnl24hUsd += p.pnl24hUsd ?? 0;
+      // Rewards and the pairs paying them report the same drip; count it once, on the pair.
+      if (p.strategy !== 'drip-reward') r.dripPerDayUsd += p.dripPerDayUsd ?? 0;
       if (p.change24hPct != null && p.sizeUsd > 0) {
         r.moveSum += p.change24hPct * p.sizeUsd;
         r.moveWeight += p.sizeUsd;
@@ -88,6 +104,10 @@ function rollup(open: Position[], closed: ClosedTrade[], keyer: Keyer): Rotation
 
 export function launchpadRotation(snap: PortfolioSnapshot): RotationRow[] {
   return rollup(snap.openPositions, snap.closedTrades, byLaunchpad);
+}
+
+export function strategyRotation(snap: PortfolioSnapshot): RotationRow[] {
+  return rollup(snap.openPositions, [], byStrategy);
 }
 
 export function narrativeRotation(snap: PortfolioSnapshot): RotationRow[] {

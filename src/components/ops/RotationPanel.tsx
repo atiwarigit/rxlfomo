@@ -1,7 +1,13 @@
 import { useMemo, useState } from 'react';
 import { Rocket } from 'lucide-react';
 import type { PortfolioSnapshot } from '../../types/portfolio';
-import { launchpadRotation, narrativeRotation, rotationCall, type RotationRow } from '../../lib/ops/rotation';
+import {
+  launchpadRotation,
+  narrativeRotation,
+  rotationCall,
+  strategyRotation,
+  type RotationRow,
+} from '../../lib/ops/rotation';
 import { cn, formatPct, formatSignedUsd, formatUsd } from '../../lib/format';
 
 function tone(v: number | null | undefined) {
@@ -24,6 +30,7 @@ function Table({ rows: allRows, total }: { rows: RotationRow[]; total: number })
   );
   const rows = allRows.filter((r) => visible.has(r.key));
   const hidden = allRows.length - rows.length;
+  const showDrip = allRows.some((r) => r.dripPerDayUsd > 0);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-[12px]">
@@ -36,6 +43,7 @@ function Table({ rows: allRows, total }: { rows: RotationRow[]; total: number })
             <th className="py-2 pr-3 text-right font-medium">Unrealized</th>
             <th className="py-2 pr-3 text-right font-medium">Realized</th>
             <th className="py-2 pr-3 text-right font-medium">Wins</th>
+            {showDrip ? <th className="py-2 pr-3 text-right font-medium">Drip / day</th> : null}
             <th className="py-2 text-right font-medium">Net</th>
           </tr>
         </thead>
@@ -66,6 +74,11 @@ function Table({ rows: allRows, total }: { rows: RotationRow[]; total: number })
               <td className="py-2 pr-3 text-right font-mono text-white/60">
                 {r.closes ? `${r.wins}/${r.closes}` : '—'}
               </td>
+              {showDrip ? (
+                <td className={cn('py-2 pr-3 text-right font-mono', tone(r.dripPerDayUsd))}>
+                  {r.dripPerDayUsd > 0 ? `~${formatUsd(r.dripPerDayUsd)}` : '—'}
+                </td>
+              ) : null}
               <td className={cn('py-2 text-right font-mono font-semibold', tone(r.totalPnlUsd))}>
                 {formatSignedUsd(r.totalPnlUsd)}
               </td>
@@ -87,10 +100,11 @@ function Table({ rows: allRows, total }: { rows: RotationRow[]; total: number })
 }
 
 export function RotationPanel({ data }: { data: PortfolioSnapshot }) {
-  const [view, setView] = useState<'launchpad' | 'narrative'>('launchpad');
+  const [view, setView] = useState<'launchpad' | 'narrative' | 'strategy'>('launchpad');
   const pads = useMemo(() => launchpadRotation(data), [data]);
   const stories = useMemo(() => narrativeRotation(data), [data]);
-  const rows = view === 'launchpad' ? pads : stories;
+  const strategies = useMemo(() => strategyRotation(data), [data]);
+  const rows = view === 'launchpad' ? pads : view === 'narrative' ? stories : strategies;
   const call = rotationCall(rows);
   const total = data.summary.openPositionsValue;
 
@@ -111,7 +125,7 @@ export function RotationPanel({ data }: { data: PortfolioSnapshot }) {
             </span>
           ) : null}
           <div className="flex rounded-lg border border-white/10 p-0.5 text-[11px]">
-            {(['launchpad', 'narrative'] as const).map((v) => (
+            {(['launchpad', 'narrative', 'strategy'] as const).map((v) => (
               <button
                 key={v}
                 type="button"
@@ -133,6 +147,9 @@ export function RotationPanel({ data }: { data: PortfolioSnapshot }) {
         paired against another token show as “STONK pair”, “wNEAR pair”, etc. Narratives are
         keyword + pairing tags (stock-paired = Stonks). Realized uses the loaded Relay window.
         {view === 'narrative' ? ' A name can sit in more than one narrative.' : ''}
+        {view === 'strategy'
+          ? ' Drip = transfers in from a distributor with nothing spent; buys spend another token. Drip/day is sampled from recent wallet history and split across the pairs paying it by size.'
+          : ''}
       </p>
     </section>
   );

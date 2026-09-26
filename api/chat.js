@@ -29,6 +29,7 @@ function rollup(open, closed, keyer) {
       closes: 0,
       wins: 0,
       totalPnlUsd: 0,
+      dripPerDayUsd: 0,
       symbols: [],
       moveWeight: 0,
       moveSum: 0
@@ -43,6 +44,7 @@ function rollup(open, closed, keyer) {
       r.sizeUsd += p.sizeUsd;
       r.unrealizedUsd += p.hasCostBasis ? p.unrealizedPnl : p.pnl24hUsd ?? 0;
       r.pnl24hUsd += p.pnl24hUsd ?? 0;
+      if (p.strategy !== "drip-reward") r.dripPerDayUsd += p.dripPerDayUsd ?? 0;
       if (p.change24hPct != null && p.sizeUsd > 0) {
         r.moveSum += p.change24hPct * p.sizeUsd;
         r.moveWeight += p.sizeUsd;
@@ -88,7 +90,7 @@ function compactBook(snap) {
   lines.push("Open names (size, 24h, unrealized, basis, chain, launchpad, narratives, paired vs):");
   for (const p of snap.openPositions.slice(0, 16)) {
     lines.push(
-      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? "n/a" : p.change24hPct.toFixed(1) + "%"} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? "yes" : "no"} ${p.chain} pad=${p.launchpad || "?"} story=${(p.narratives || []).join("/") || "?"}${p.quoteSymbol ? ` vs=${p.quoteSymbol}` : ""}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, " ").slice(0, 80)}"` : ""}`
+      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? "n/a" : p.change24hPct.toFixed(1) + "%"} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? "yes" : "no"} ${p.chain} pad=${p.launchpad || "?"} story=${(p.narratives || []).join("/") || "?"}${p.quoteSymbol ? ` vs=${p.quoteSymbol}` : ""}${p.strategy && p.strategy !== "trade" ? ` strategy=${p.strategy}${p.dripPays ? ` pays=${p.dripPays}` : ""}${p.dripFrom?.length ? ` from=${p.dripFrom.join("/")}` : ""}${p.dripPerDayUsd ? ` drip/day~${n(p.dripPerDayUsd)}` : ""}` : ""}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, " ").slice(0, 80)}"` : ""}`
     );
   }
   const pads = launchpadRotation(snap);

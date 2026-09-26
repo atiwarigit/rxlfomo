@@ -14,6 +14,8 @@ import { buildAlerts, buildEquityCurve, drawdownPct, statsFromClosed } from './m
 import { closedFromRelaySwaps, positionsFromRelaySwaps } from './relayPositions.ts';
 import { fetchRelayHistory } from '../relay/api.ts';
 import { fetchTokenMeta, type TokenMeta } from '../launchpad/gecko.ts';
+import { narrativesFor, pairLaunch } from '../launchpad/classify.ts';
+import { analyzeDrips, type DripStats } from '../wallet/drip.ts';
 import type {
   ClosedTrade,
   LoadPortfolioInput,
@@ -301,7 +303,12 @@ function findRank(traders: { handle?: string; rank?: number }[] | undefined, han
   return traders?.find((t) => (t.handle || '').replace(/^@/, '').toLowerCase() === h)?.rank;
 }
 
-async function tagLaunchpads(open: Position[], closed: ClosedTrade[], fetchFn: typeof fetch) {
+async function tagLaunchpads(
+  open: Position[],
+  closed: ClosedTrade[],
+  markets: Map<string, TokenMarket>,
+  fetchFn: typeof fetch,
+) {
   const requests = [...open, ...closed]
     .filter((p) => p.mint)
     .map((p) => ({ address: p.mint as string, chain: p.chain, symbol: p.symbol }));
@@ -313,12 +320,78 @@ async function tagLaunchpads(open: Position[], closed: ClosedTrade[], fetchFn: t
   }
   for (const row of [...open, ...closed]) {
     const m = row.mint ? meta.get(row.mint.toLowerCase()) : undefined;
-    if (!m) continue;
+    if (!m) {
+      // GeckoTerminal missed (rate limit): fall back to the Dex pair so pairing still links drips.
+      const quote = marketFor(row.mint, markets)?.quoteSymbol;
+      if (!quote) continue;
+      const pad = pairLaunch(quote);
+      if (pad) {
+        row.launchpad = pad.label;
+        row.launchpadId = pad.id;
+      }
+      row.narratives = narrativesFor({ symbol: row.symbol, quote });
+      if ('currentPrice' in row) (row as Position).quoteSymbol = quote;
+      continue;
+    }
     row.launchpad = m.launchpad.label;
     row.launchpadId = m.launchpad.id;
     row.narratives = m.narratives;
     if ('currentPrice' in row) (row as Position).quoteSymbol = m.quote;
   }
+}
+
+function symbolKey(s?: string) {
+  return (s || '').toLowerCase().replace(/^\$/, '');
+}
+
+function sameAsset(a?: string, b?: string) {
+  const x = symbolKey(a);
+  const y = symbolKey(b);
+  return Boolean(x && y) && (x === y || x === `w${y}` || `w${x}` === y);
+}
+
+/** Split Solana holdings into drip rewards, the pairs that pay them, and active trades. */
+export async function tagDrips(
+  open: Position[],
+  owner: string,
+  fetchFn: typeof fetch,
+  analyze: typeof analyzeDrips = analyzeDrips,
+) {
+  const sol = open.filter((p) => p.chain === 'solana' && p.mint);
+  const payersOf = (reward: Position) =>
+    sol.filter((t) => t !== reward && sameAsset(t.quoteSymbol, reward.symbol));
+  const candidates = sol
+    .filter((p) => payersOf(p).length > 0)
+    .sort((a, b) => b.sizeUsd - a.sizeUsd)
+    .slice(0, 6);
+  let stats = new Map<string, DripStats>();
+  if (candidates.length) {
+    try {
+      stats = await analyze(owner, candidates.map((p) => p.mint as string), fetchFn);
+    } catch {
+      // keep everything as trades
+    }
+  }
+  for (const reward of candidates) {
+    const s = stats.get(reward.mint as string);
+    if (!s || s.kind === 'trade') continue;
+    const unit = reward.amount && reward.amount > 0 ? reward.sizeUsd / reward.amount : reward.currentPrice;
+    const receivedUsd = s.receivedAmount * (unit || 0);
+    const perDay = s.windowDays > 0 ? receivedUsd / s.windowDays : 0;
+    const sources = payersOf(reward);
+    reward.strategy = 'drip-reward';
+    reward.dripReceipts = s.receipts;
+    reward.dripReceivedUsd = receivedUsd;
+    reward.dripPerDayUsd = perDay;
+    reward.dripFrom = sources.map((t) => t.symbol);
+    const total = sources.reduce((sum, t) => sum + t.sizeUsd, 0) || 1;
+    for (const t of sources) {
+      t.strategy = 'drip-pair';
+      t.dripPays = reward.symbol;
+      t.dripPerDayUsd = (t.dripPerDayUsd ?? 0) + perDay * (t.sizeUsd / total);
+    }
+  }
+  for (const p of open) p.strategy = p.strategy ?? 'trade';
 }
 
 export async function loadPortfolio(input: LoadPortfolioInput): Promise<PortfolioSnapshot> {
@@ -526,7 +599,8 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     );
   }
   const { cash, risk } = splitCash(merged);
-  await tagLaunchpads(risk, closed, fetchFn);
+  await tagLaunchpads(risk, closed, markets, fetchFn);
+  if (solanaWallet && onchainOk) await tagDrips(risk, solanaWallet, fetchFn);
 
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
