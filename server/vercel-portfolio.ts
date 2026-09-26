@@ -1,4 +1,5 @@
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
+import { knownWallets } from './knownWallets.ts';
 
 export const config = {
   maxDuration: 60,
@@ -53,9 +54,14 @@ export default async function handler(
     }
 
     const handle = queryValue(req, 'handle') || process.env.FOMO_HANDLE || process.env.VITE_FOMO_HANDLE || '';
+    const known = knownWallets(handle);
     const solanaWallet =
-      queryValue(req, 'solana') || process.env.SOLANA_WALLET || process.env.VITE_SOLANA_WALLET || '';
-    const evmWallet = queryValue(req, 'evm') || process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || '';
+      queryValue(req, 'solana') ||
+      process.env.SOLANA_WALLET ||
+      process.env.VITE_SOLANA_WALLET ||
+      known.solana;
+    const evmWallet =
+      queryValue(req, 'evm') || process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || known.evm;
     const apiKey =
       headerValue(req.headers, 'x-fomo-api-key') ||
       process.env.FOMO_API_KEY ||

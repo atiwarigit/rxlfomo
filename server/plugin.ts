@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Connect, Plugin, ViteDevServer } from 'vite';
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
 import chatHandler from './vercel-chat.ts';
+import { knownWallets } from './knownWallets.ts';
 
 function readUrl(req: IncomingMessage): URL {
   return new URL(req.url || '/', 'http://localhost');
@@ -28,13 +29,14 @@ async function handlePortfolio(
   const url = readUrl(req);
   const handle =
     url.searchParams.get('handle') || env.FOMO_HANDLE || env.VITE_FOMO_HANDLE || '';
+  const known = knownWallets(handle);
   const solanaWallet =
     url.searchParams.get('solana') ||
     env.SOLANA_WALLET ||
     env.VITE_SOLANA_WALLET ||
-    '';
+    known.solana;
   const evmWallet =
-    url.searchParams.get('evm') || env.EVM_WALLET || env.VITE_EVM_WALLET || '';
+    url.searchParams.get('evm') || env.EVM_WALLET || env.VITE_EVM_WALLET || known.evm;
   const apiKey =
     header(req, 'x-fomo-api-key') || env.FOMO_API_KEY || env.VITE_FOMO_API_KEY || '';
 
@@ -110,12 +112,13 @@ function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
     }
     if (path === '/api/defaults') {
       const handle = env.FOMO_HANDLE || env.VITE_FOMO_HANDLE || '';
+      const known = knownWallets(handle);
       send(res, 200, {
         handle,
         hasApiKey: Boolean(env.FOMO_API_KEY || env.VITE_FOMO_API_KEY),
         hasLlmKey: Boolean(env.LLM_API_KEY || env.AI_GATEWAY_API_KEY || env.OPENAI_API_KEY),
-        solanaWallet: env.SOLANA_WALLET || env.VITE_SOLANA_WALLET || '',
-        evmWallet: env.EVM_WALLET || env.VITE_EVM_WALLET || '',
+        solanaWallet: env.SOLANA_WALLET || env.VITE_SOLANA_WALLET || known.solana,
+        evmWallet: env.EVM_WALLET || env.VITE_EVM_WALLET || known.evm,
       });
       return;
     }

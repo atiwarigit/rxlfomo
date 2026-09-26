@@ -12,6 +12,7 @@ import {
 } from './helpers.ts';
 import { buildAlerts, buildEquityCurve, drawdownPct, statsFromClosed } from './metrics.ts';
 import { positionsFromRelaySwaps } from './relayPositions.ts';
+import { fetchRelayHistory } from '../relay/api.ts';
 import type {
   ClosedTrade,
   LoadPortfolioInput,
@@ -427,6 +428,24 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
   let onchain: OnchainHolding[] = [];
   let onchainOk = false;
   startOnchain();
+  const relayUser = solanaWallet || evmWallet;
+  const relayPromise = relayUser ? fetchRelayHistory(relayUser, fetchFn) : undefined;
+  let relayOk = false;
+  if (relayPromise) {
+    try {
+      const history = await relayPromise;
+      if (history.swaps.length) {
+        relayOpen = positionsFromRelaySwaps(history.swaps);
+        relayOk = true;
+      }
+      evmWallet = evmWallet || history.evmWallet;
+      if (history.truncated) {
+        warnings.push('Relay history was cut short (long history or rate limit); bags bought before the loaded window may be missing.');
+      }
+    } catch (err) {
+      warnings.push(`Relay history: ${err instanceof Error ? err.message : 'failed'}`);
+    }
+  }
   if (onchainPromise) {
     try {
       onchain = await onchainPromise;
@@ -537,7 +556,7 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     wallets: { solana: solanaWallet, evm: evmWallet },
     source: {
       fomo: fomoOk,
-      onchain: onchainOk,
+      onchain: onchainOk || relayOk,
       fetchedAt: new Date().toISOString(),
       warnings: [...new Set(warnings)],
     },

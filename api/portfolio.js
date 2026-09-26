@@ -585,6 +585,96 @@ function positionsFromRelaySwaps(swaps) {
   return out;
 }
 
+// src/lib/relay/api.ts
+var RELAY_REQUESTS = "https://api.relay.link/requests/v2";
+var RELAY_SOLANA_CHAIN_ID = 792703809;
+function chainName(chainId) {
+  if (chainId === RELAY_SOLANA_CHAIN_ID) return "solana";
+  if (chainId === 4663) return "robinhood";
+  if (chainId === 8453) return "base";
+  if (chainId === 56) return "bnb";
+  if (chainId === 1) return "ethereum";
+  return void 0;
+}
+function toToken(c) {
+  if (!c?.currency) return void 0;
+  const amount = Number(c.amountFormatted);
+  const usd = Number(c.amountUsd);
+  const usdNow = Number(c.amountUsdCurrent);
+  return {
+    address: c.currency.address,
+    symbol: c.currency.symbol,
+    chainId: c.currency.chainId,
+    amount: Number.isFinite(amount) ? amount : 0,
+    usd: Number.isFinite(usd) ? usd : 0,
+    usdNow: Number.isFinite(usdNow) ? usdNow : void 0
+  };
+}
+function swapsFromRelayRequests(requests) {
+  const swaps = [];
+  const recipients = /* @__PURE__ */ new Map();
+  for (const r of requests) {
+    if (r.status !== "success") continue;
+    const m = r.data?.metadata;
+    const tokenIn = toToken(m?.currencyIn);
+    const tokenOut = toToken(m?.currencyOut);
+    if (!tokenIn || !tokenOut) continue;
+    const recipient = m?.recipient || r.recipient;
+    if (recipient?.startsWith("0x")) {
+      recipients.set(recipient.toLowerCase(), (recipients.get(recipient.toLowerCase()) ?? 0) + 1);
+    }
+    swaps.push({
+      swapId: r.id,
+      fromChain: chainName(tokenIn.chainId),
+      toChain: chainName(tokenOut.chainId),
+      chainId: tokenOut.chainId,
+      tokenIn,
+      tokenOut,
+      status: r.status,
+      at: r.createdAt,
+      source: "relay"
+    });
+  }
+  const evmWallet = [...recipients.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return { swaps, evmWallet, truncated: false };
+}
+async function fetchRelayHistory(user, fetchFn = fetch, maxPages = 8) {
+  const all = [];
+  let continuation;
+  let pages = 0;
+  let stoppedEarly = false;
+  do {
+    const params = new URLSearchParams({ user, limit: "50" });
+    if (continuation) params.set("continuation", continuation);
+    const body = await fetchPage(`${RELAY_REQUESTS}?${params}`, fetchFn);
+    if (!body) {
+      if (!all.length) throw new Error("Relay rate-limited or unavailable");
+      stoppedEarly = true;
+      break;
+    }
+    all.push(...body.requests ?? []);
+    continuation = body.continuation || void 0;
+    pages += 1;
+  } while (continuation && pages < maxPages);
+  const history = swapsFromRelayRequests(all);
+  return { ...history, truncated: stoppedEarly || Boolean(continuation) };
+}
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function fetchPage(url, fetchFn) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await fetchFn(url, { signal: AbortSignal.timeout(15e3) });
+      if (res.ok) return await res.json();
+      if (res.status !== 429 && res.status < 500) return null;
+      const retryAfter = Number(res.headers.get("retry-after"));
+      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 5) * 1e3 : 800 * 2 ** attempt);
+    } catch {
+      await sleep(800 * 2 ** attempt);
+    }
+  }
+  return null;
+}
+
 // src/lib/portfolio/load.ts
 var DUST_USD2 = 5;
 var WSOL3 = "So11111111111111111111111111111111111111112";
@@ -950,6 +1040,24 @@ async function loadPortfolio(input) {
   let onchain = [];
   let onchainOk = false;
   startOnchain();
+  const relayUser = solanaWallet || evmWallet;
+  const relayPromise = relayUser ? fetchRelayHistory(relayUser, fetchFn) : void 0;
+  let relayOk = false;
+  if (relayPromise) {
+    try {
+      const history = await relayPromise;
+      if (history.swaps.length) {
+        relayOpen = positionsFromRelaySwaps(history.swaps);
+        relayOk = true;
+      }
+      evmWallet = evmWallet || history.evmWallet;
+      if (history.truncated) {
+        warnings.push("Relay history was cut short (long history or rate limit); bags bought before the loaded window may be missing.");
+      }
+    } catch (err) {
+      warnings.push(`Relay history: ${err instanceof Error ? err.message : "failed"}`);
+    }
+  }
   if (onchainPromise) {
     try {
       onchain = await onchainPromise;
@@ -1029,7 +1137,7 @@ async function loadPortfolio(input) {
     wallets: { solana: solanaWallet, evm: evmWallet },
     source: {
       fomo: fomoOk,
-      onchain: onchainOk,
+      onchain: onchainOk || relayOk,
       fetchedAt: (/* @__PURE__ */ new Date()).toISOString(),
       warnings: [...new Set(warnings)]
     },
@@ -1068,6 +1176,18 @@ async function loadPortfolio(input) {
   };
 }
 
+// server/knownWallets.ts
+var KNOWN = {
+  busymeredog: {
+    solana: "7G4MHQzKBdiMuwW1E2cCpEti8wQDxd8gj8rjS3kyF67b",
+    evm: "0x06953a582f054b7b7c4c6dd890777e3958b4a673"
+  }
+};
+function knownWallets(handle) {
+  const row = KNOWN[(handle || "").replace(/^@/, "").toLowerCase()] ?? {};
+  return { solana: row.solana || "", evm: row.evm || "" };
+}
+
 // server/vercel-portfolio.ts
 var config = {
   maxDuration: 60
@@ -1104,8 +1224,9 @@ async function handler(req, res) {
       return;
     }
     const handle = queryValue(req, "handle") || process.env.FOMO_HANDLE || process.env.VITE_FOMO_HANDLE || "";
-    const solanaWallet = queryValue(req, "solana") || process.env.SOLANA_WALLET || process.env.VITE_SOLANA_WALLET || "";
-    const evmWallet = queryValue(req, "evm") || process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || "";
+    const known = knownWallets(handle);
+    const solanaWallet = queryValue(req, "solana") || process.env.SOLANA_WALLET || process.env.VITE_SOLANA_WALLET || known.solana;
+    const evmWallet = queryValue(req, "evm") || process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || known.evm;
     const apiKey = headerValue(req.headers, "x-fomo-api-key") || process.env.FOMO_API_KEY || process.env.VITE_FOMO_API_KEY || "";
     if (!handle && !solanaWallet) {
       json(res, 400, {
