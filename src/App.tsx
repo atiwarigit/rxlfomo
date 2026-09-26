@@ -18,10 +18,14 @@ import {
   emptyConfig,
   loadClientConfig,
   mergeEquityLogs,
+  normHandle,
   readEquityLog,
+  recentHandles,
+  rememberHandle,
   rememberPeak,
   rememberWallets,
   saveClientConfig,
+  walletsFor,
   type ClientConfig,
 } from './lib/localJournal';
 import { heroSlots } from './lib/ops/heroes';
@@ -47,9 +51,12 @@ async function readJson<T>(res: Response): Promise<T> {
 
 async function fetchPortfolio(cfg: ClientConfig): Promise<PortfolioSnapshot> {
   const params = new URLSearchParams();
+  const cached = walletsFor(cfg.handle);
+  const solana = cfg.solanaWallet || cached.solana;
+  const evm = cfg.evmWallet || cached.evm;
   if (cfg.handle) params.set('handle', cfg.handle);
-  if (cfg.solanaWallet) params.set('solana', cfg.solanaWallet);
-  if (cfg.evmWallet) params.set('evm', cfg.evmWallet);
+  if (solana) params.set('solana', solana);
+  if (evm) params.set('evm', evm);
   const res = await fetch(`/api/portfolio?${params.toString()}`, {
     headers: cfg.apiKey ? { 'x-fomo-api-key': cfg.apiKey } : undefined,
   });
@@ -63,10 +70,17 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasServerLlmKey, setHasServerLlmKey] = useState(false);
+  const [handles, setHandles] = useState<string[]>(() => recentHandles());
 
   useEffect(() => {
     void (async () => {
       let cfg = loadClientConfig();
+      if (cfg.handle && (cfg.solanaWallet || cfg.evmWallet)) {
+        // Older builds stored the resolved wallet in the global config; keep it with its handle.
+        rememberWallets(cfg.handle, { solana: cfg.solanaWallet, evm: cfg.evmWallet });
+        cfg = { ...cfg, solanaWallet: '', evmWallet: '' };
+        saveClientConfig(cfg);
+      }
       try {
         const defaults = await readJson<{
           handle?: string;
@@ -76,17 +90,17 @@ function App() {
         }>(await fetch('/api/defaults'));
         setHasServerLlmKey(Boolean(defaults.hasLlmKey));
         if (defaults.handle) {
-          const leftoverWallet = !cfg.handle;
-          cfg = {
-            ...cfg,
-            handle: defaults.handle,
-            solanaWallet: leftoverWallet ? defaults.solanaWallet || '' : cfg.solanaWallet,
-            evmWallet: leftoverWallet ? defaults.evmWallet || '' : cfg.evmWallet,
-          };
+          rememberHandle(defaults.handle);
+          if (!cfg.handle) cfg = { ...cfg, handle: defaults.handle };
         }
       } catch {
         // keep local config
       }
+      const fromUrl = new URLSearchParams(window.location.search).get('handle')?.replace(/^@/, '').trim();
+      if (fromUrl && normHandle(fromUrl) !== normHandle(cfg.handle)) {
+        cfg = { ...cfg, handle: fromUrl, solanaWallet: '', evmWallet: '' };
+      }
+      if (cfg.handle) setHandles(rememberHandle(cfg.handle));
       setConfig(cfg);
       if (cfg.handle || cfg.solanaWallet) {
         void refresh(cfg);
@@ -107,25 +121,25 @@ function App() {
     setError(null);
     try {
       const snap = await fetchPortfolio(cfg);
-      const remembered = rememberWallets(cfg, snap.wallets);
-      if (remembered !== cfg) setConfig(remembered);
+      const book = cfg.handle || cfg.solanaWallet;
+      if (cfg.handle) rememberWallets(cfg.handle, snap.wallets);
       const live = snap.source.fomo || snap.source.onchain;
       if (live) {
-        const peak = rememberPeak(snap.summary.totalEquity);
+        const peak = rememberPeak(book, snap.summary.totalEquity);
         snap.summary.peakEquity = Math.max(peak, snap.summary.peakEquity);
         snap.summary.currentDrawdownPct =
           snap.summary.peakEquity > 0
             ? ((snap.summary.totalEquity - snap.summary.peakEquity) / snap.summary.peakEquity) * 100
             : 0;
         const today = new Date().toISOString().slice(0, 10);
-        const stored = appendEquityLog({
+        const stored = appendEquityLog(book, {
           date: today,
           equity: snap.summary.totalEquity,
           realizedPnl: snap.summary.realizedPnlAllTime ?? 0,
         });
         snap.equityCurve = mergeEquityLogs(snap.equityCurve, stored);
       } else {
-        snap.equityCurve = mergeEquityLogs([], readEquityLog());
+        snap.equityCurve = mergeEquityLogs([], readEquityLog(book));
         setError(
           'No live source answered (see warnings). Paste your Solana address in Sources to load the book from chain while FOMO is down. The curve below is your last good history, not a $0 print.',
         );
@@ -136,6 +150,20 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function switchHandle(next: string) {
+    const clean = next.replace(/^@/, '').trim();
+    if (!clean || normHandle(clean) === normHandle(config.handle)) return;
+    const cfg = { ...config, handle: clean, solanaWallet: '', evmWallet: '' };
+    saveClientConfig(cfg);
+    setConfig(cfg);
+    setHandles(rememberHandle(clean));
+    setData(null);
+    const url = new URL(window.location.href);
+    url.searchParams.set('handle', clean);
+    window.history.replaceState(null, '', url);
+    void refresh(cfg);
   }
 
   const summary = data?.summary;
@@ -158,6 +186,9 @@ function App() {
         decisions={stream.length}
         sourceLabel={sourceLabel}
         loading={loading}
+        handle={config.handle}
+        handles={handles}
+        onSwitch={switchHandle}
         onRefresh={() => void refresh()}
         onSources={() => setSettingsOpen(true)}
       />
@@ -283,10 +314,24 @@ function App() {
         open={settingsOpen}
         hasServerLlmKey={hasServerLlmKey}
         onClose={() => setSettingsOpen(false)}
-        onSave={(cfg) => {
+        onSave={(draft) => {
+          const handleChanged = normHandle(draft.handle) !== normHandle(config.handle);
+          const cfg =
+            handleChanged &&
+            draft.solanaWallet === config.solanaWallet &&
+            draft.evmWallet === config.evmWallet
+              ? { ...draft, solanaWallet: '', evmWallet: '' }
+              : draft;
           saveClientConfig(cfg);
           setConfig(cfg);
           setSettingsOpen(false);
+          if (cfg.handle) setHandles(rememberHandle(cfg.handle));
+          if (handleChanged) {
+            setData(null);
+            const url = new URL(window.location.href);
+            url.searchParams.set('handle', cfg.handle);
+            window.history.replaceState(null, '', url);
+          }
           void refresh(cfg);
         }}
       />

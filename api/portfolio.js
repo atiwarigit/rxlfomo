@@ -1446,6 +1446,10 @@ var KNOWN = {
     evm: "0x06953a582f054b7b7c4c6dd890777e3958b4a673"
   }
 };
+function sameHandle(a, b) {
+  const norm = (h) => (h || "").replace(/^@/, "").trim().toLowerCase();
+  return !norm(a) || !norm(b) || norm(a) === norm(b);
+}
 function knownWallets(handle) {
   const row = KNOWN[(handle || "").replace(/^@/, "").toLowerCase()] ?? {};
   return { solana: row.solana || "", evm: row.evm || "" };
@@ -1486,10 +1490,15 @@ async function handler(req, res) {
       res.status(204).end();
       return;
     }
-    const handle = queryValue(req, "handle") || process.env.FOMO_HANDLE || process.env.VITE_FOMO_HANDLE || "";
+    const defaultHandle = process.env.FOMO_HANDLE || process.env.VITE_FOMO_HANDLE || "";
+    const handle = queryValue(req, "handle") || defaultHandle;
+    const envWallets = sameHandle(handle, defaultHandle) ? {
+      solana: process.env.SOLANA_WALLET || process.env.VITE_SOLANA_WALLET || "",
+      evm: process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || ""
+    } : { solana: "", evm: "" };
     const known = knownWallets(handle);
-    const solanaWallet = queryValue(req, "solana") || process.env.SOLANA_WALLET || process.env.VITE_SOLANA_WALLET || known.solana;
-    const evmWallet = queryValue(req, "evm") || process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || known.evm;
+    const solanaWallet = queryValue(req, "solana") || envWallets.solana || known.solana;
+    const evmWallet = queryValue(req, "evm") || envWallets.evm || known.evm;
     const apiKey = headerValue(req.headers, "x-fomo-api-key") || process.env.FOMO_API_KEY || process.env.VITE_FOMO_API_KEY || "";
     if (!handle && !solanaWallet) {
       json(res, 400, {

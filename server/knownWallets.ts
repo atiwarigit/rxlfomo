@@ -5,6 +5,11 @@ const KNOWN: Record<string, { solana?: string; evm?: string }> = {
   },
 };
 
+export function sameHandle(a?: string, b?: string): boolean {
+  const norm = (h?: string) => (h || '').replace(/^@/, '').trim().toLowerCase();
+  return !norm(a) || !norm(b) || norm(a) === norm(b);
+}
+
 /** Public addresses for handles this deployment serves; env vars still win. */
 export function knownWallets(handle?: string): { solana: string; evm: string } {
   const row = KNOWN[(handle || '').replace(/^@/, '').toLowerCase()] ?? {};

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Connect, Plugin, ViteDevServer } from 'vite';
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
 import chatHandler from './vercel-chat.ts';
-import { knownWallets } from './knownWallets.ts';
+import { knownWallets, sameHandle } from './knownWallets.ts';
 
 function readUrl(req: IncomingMessage): URL {
   return new URL(req.url || '/', 'http://localhost');
@@ -27,16 +27,17 @@ async function handlePortfolio(
   env: Record<string, string>,
 ) {
   const url = readUrl(req);
-  const handle =
-    url.searchParams.get('handle') || env.FOMO_HANDLE || env.VITE_FOMO_HANDLE || '';
+  const defaultHandle = env.FOMO_HANDLE || env.VITE_FOMO_HANDLE || '';
+  const handle = url.searchParams.get('handle') || defaultHandle;
+  const envWallets = sameHandle(handle, defaultHandle)
+    ? {
+        solana: env.SOLANA_WALLET || env.VITE_SOLANA_WALLET || '',
+        evm: env.EVM_WALLET || env.VITE_EVM_WALLET || '',
+      }
+    : { solana: '', evm: '' };
   const known = knownWallets(handle);
-  const solanaWallet =
-    url.searchParams.get('solana') ||
-    env.SOLANA_WALLET ||
-    env.VITE_SOLANA_WALLET ||
-    known.solana;
-  const evmWallet =
-    url.searchParams.get('evm') || env.EVM_WALLET || env.VITE_EVM_WALLET || known.evm;
+  const solanaWallet = url.searchParams.get('solana') || envWallets.solana || known.solana;
+  const evmWallet = url.searchParams.get('evm') || envWallets.evm || known.evm;
   const apiKey =
     header(req, 'x-fomo-api-key') || env.FOMO_API_KEY || env.VITE_FOMO_API_KEY || '';
 

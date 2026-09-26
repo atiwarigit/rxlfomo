@@ -1,8 +1,11 @@
 import type { ClosedTrade, EquityPoint } from '../types/portfolio.ts';
 
 const CONFIG_KEY = 'fomo-dashboard-config';
-const PEAK_KEY = 'fomo-dashboard-peak-equity';
-const CURVE_KEY = 'fomo-dashboard-equity-log';
+const LEGACY_PEAK_KEY = 'fomo-dashboard-peak-equity';
+const LEGACY_CURVE_KEY = 'fomo-dashboard-equity-log';
+const LEGACY_OWNER = 'busymeredog';
+const WALLETS_KEY = 'fomo-dashboard-wallets';
+const RECENT_KEY = 'fomo-dashboard-recent-handles';
 
 export interface ClientConfig {
   handle: string;
@@ -23,6 +26,10 @@ export const emptyConfig = (): ClientConfig => ({
   llmModel: 'gpt-5.4',
   llmBaseUrl: '',
 });
+
+export function normHandle(handle?: string): string {
+  return (handle || '').replace(/^@/, '').trim().toLowerCase();
+}
 
 export function loadClientConfig(): ClientConfig {
   const base: ClientConfig = {
@@ -56,41 +63,79 @@ export function saveClientConfig(cfg: ClientConfig) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
 }
 
-export function rememberWallets(cfg: ClientConfig, wallets: { solana?: string; evm?: string }): ClientConfig {
-  const next = {
-    ...cfg,
-    solanaWallet: cfg.solanaWallet || wallets.solana || '',
-    evmWallet: cfg.evmWallet || wallets.evm || '',
-  };
-  if (next.solanaWallet !== cfg.solanaWallet || next.evmWallet !== cfg.evmWallet) {
-    saveClientConfig(next);
-  }
-  return next;
-}
+type WalletPair = { solana?: string; evm?: string };
 
-export function rememberPeak(equity: number): number {
-  const prev = Number(localStorage.getItem(PEAK_KEY) || 0);
-  const peak = Math.max(prev, equity, 0);
-  localStorage.setItem(PEAK_KEY, String(peak));
-  return peak;
-}
-
-export function readEquityLog(): EquityPoint[] {
+function readWalletBook(): Record<string, WalletPair> {
   try {
-    const log = JSON.parse(localStorage.getItem(CURVE_KEY) || '[]') as EquityPoint[];
-    return log.filter((p) => p.equity > 0);
+    return JSON.parse(localStorage.getItem(WALLETS_KEY) || '{}') as Record<string, WalletPair>;
+  } catch {
+    return {};
+  }
+}
+
+/** Wallets the server resolved for this handle on a previous load. */
+export function walletsFor(handle: string): WalletPair {
+  return readWalletBook()[normHandle(handle)] ?? {};
+}
+
+export function rememberWallets(handle: string, wallets: WalletPair) {
+  const key = normHandle(handle);
+  if (!key || (!wallets.solana && !wallets.evm)) return;
+  const book = readWalletBook();
+  const prev = book[key] ?? {};
+  book[key] = { solana: wallets.solana || prev.solana, evm: wallets.evm || prev.evm };
+  localStorage.setItem(WALLETS_KEY, JSON.stringify(book));
+}
+
+export function recentHandles(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') as string[];
   } catch {
     return [];
   }
 }
 
-export function appendEquityLog(point: EquityPoint): EquityPoint[] {
-  const log = readEquityLog();
+export function rememberHandle(handle: string): string[] {
+  const clean = handle.replace(/^@/, '').trim();
+  if (!clean) return recentHandles();
+  const next = [clean, ...recentHandles().filter((h) => normHandle(h) !== normHandle(clean))].slice(0, 8);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  return next;
+}
+
+function scopedKey(base: string, handle: string) {
+  return `${base}:${normHandle(handle) || 'wallet'}`;
+}
+
+function readScoped(base: string, legacy: string, handle: string): string | null {
+  const own = localStorage.getItem(scopedKey(base, handle));
+  if (own != null) return own;
+  return normHandle(handle) === LEGACY_OWNER ? localStorage.getItem(legacy) : null;
+}
+
+export function rememberPeak(handle: string, equity: number): number {
+  const prev = Number(readScoped(LEGACY_PEAK_KEY, LEGACY_PEAK_KEY, handle) || 0);
+  const peak = Math.max(prev, equity, 0);
+  localStorage.setItem(scopedKey(LEGACY_PEAK_KEY, handle), String(peak));
+  return peak;
+}
+
+export function readEquityLog(handle: string): EquityPoint[] {
+  try {
+    const raw = readScoped(LEGACY_CURVE_KEY, LEGACY_CURVE_KEY, handle) || '[]';
+    return (JSON.parse(raw) as EquityPoint[]).filter((p) => p.equity > 0);
+  } catch {
+    return [];
+  }
+}
+
+export function appendEquityLog(handle: string, point: EquityPoint): EquityPoint[] {
+  const log = readEquityLog(handle);
   const filtered = log.filter((p) => p.date !== point.date);
   filtered.push(point);
   filtered.sort((a, b) => a.date.localeCompare(b.date));
   const trimmed = filtered.slice(-180);
-  localStorage.setItem(CURVE_KEY, JSON.stringify(trimmed));
+  localStorage.setItem(scopedKey(LEGACY_CURVE_KEY, handle), JSON.stringify(trimmed));
   return trimmed;
 }
 

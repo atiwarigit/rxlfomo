@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { RefreshCw, Settings2 } from 'lucide-react';
 import type { PortfolioSnapshot } from '../../types/portfolio';
 import { formatPct, formatSignedUsd, formatUsd } from '../../lib/format';
@@ -8,8 +9,52 @@ interface Props {
   decisions: number;
   sourceLabel: string;
   loading: boolean;
+  handle: string;
+  handles: string[];
+  onSwitch: (handle: string) => void;
   onRefresh: () => void;
   onSources: () => void;
+}
+
+function HandleSwitcher({
+  handle,
+  handles,
+  onSwitch,
+}: {
+  handle: string;
+  handles: string[];
+  onSwitch: (handle: string) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const others = handles.filter((h) => h.toLowerCase() !== handle.toLowerCase());
+  return (
+    <form
+      className="mt-1 flex items-center gap-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (draft.trim()) onSwitch(draft);
+        setDraft('');
+      }}
+    >
+      {others.slice(0, 4).map((h) => (
+        <button
+          key={h}
+          type="button"
+          onClick={() => onSwitch(h)}
+          className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-white/60 hover:bg-white/5 hover:text-white"
+        >
+          @{h}
+        </button>
+      ))}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="@handle ↵"
+        aria-label="Switch FOMO handle"
+        className="w-24 rounded-full border border-white/10 bg-black/40 px-2 py-0.5 text-[10px] outline-none focus:border-amber-400/60"
+      />
+    </form>
+  );
 }
 
 function Cell({
@@ -38,7 +83,17 @@ function Cell({
   );
 }
 
-export function HeaderStrip({ data, decisions, sourceLabel, loading, onRefresh, onSources }: Props) {
+export function HeaderStrip({
+  data,
+  decisions,
+  sourceLabel,
+  loading,
+  handle,
+  handles,
+  onSwitch,
+  onRefresh,
+  onSources,
+}: Props) {
   const s = data?.summary;
   const pnl24 = data?.pnlWindows.h24;
   const cashPct = s && s.totalEquity ? (s.cashUsd / s.totalEquity) * 100 : 0;
@@ -60,6 +115,7 @@ export function HeaderStrip({ data, decisions, sourceLabel, loading, onRefresh, 
             {' · '}
             {sourceLabel}
           </p>
+          <HandleSwitcher handle={handle} handles={handles} onSwitch={onSwitch} />
         </div>
 
         <Cell
