@@ -27,6 +27,13 @@ export const emptyConfig = (): ClientConfig => ({
   llmBaseUrl: '',
 });
 
+// Addresses the operator has replaced; drop them wherever an older build saved them.
+const RETIRED_WALLETS = new Set(['7G4MHQzKBdiMuwW1E2cCpEti8wQDxd8gj8rjS3kyF67b']);
+
+function live(addr?: string): string {
+  return addr && !RETIRED_WALLETS.has(addr) ? addr : '';
+}
+
 export function normHandle(handle?: string): string {
   return (handle || '').replace(/^@/, '').trim().toLowerCase();
 }
@@ -48,7 +55,7 @@ export function loadClientConfig(): ClientConfig {
     return {
       handle: parsed.handle || base.handle,
       apiKey: parsed.apiKey || '',
-      solanaWallet: parsed.solanaWallet || base.solanaWallet,
+      solanaWallet: live(parsed.solanaWallet) || base.solanaWallet,
       evmWallet: parsed.evmWallet || base.evmWallet,
       llmApiKey: parsed.llmApiKey || '',
       llmModel: parsed.llmModel || base.llmModel,
@@ -75,7 +82,8 @@ function readWalletBook(): Record<string, WalletPair> {
 
 /** Wallets the server resolved for this handle on a previous load. */
 export function walletsFor(handle: string): WalletPair {
-  return readWalletBook()[normHandle(handle)] ?? {};
+  const row = readWalletBook()[normHandle(handle)] ?? {};
+  return { solana: live(row.solana) || undefined, evm: row.evm };
 }
 
 export function rememberWallets(handle: string, wallets: WalletPair) {
@@ -84,7 +92,7 @@ export function rememberWallets(handle: string, wallets: WalletPair) {
   const book = readWalletBook();
   const prev = book[key] ?? {};
   // The server's answer is authoritative, so a changed default replaces the old hint.
-  book[key] = { solana: wallets.solana || prev.solana, evm: wallets.evm || prev.evm };
+  book[key] = { solana: live(wallets.solana) || live(prev.solana), evm: wallets.evm || prev.evm };
   localStorage.setItem(WALLETS_KEY, JSON.stringify(book));
 }
 

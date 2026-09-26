@@ -3,6 +3,7 @@ import { RefreshCw, Settings2 } from 'lucide-react';
 import type { PortfolioSnapshot } from '../../types/portfolio';
 import { formatPct, formatSignedUsd, formatUsd } from '../../lib/format';
 import { LiveClock } from './LiveClock';
+import { compactAddress } from '../../lib/portfolio/helpers';
 
 interface Props {
   data: PortfolioSnapshot | null;
@@ -115,6 +116,17 @@ export function HeaderStrip({
             {' · '}
             {sourceLabel}
           </p>
+          {data?.wallets.solana || data?.wallets.evm ? (
+            <p className="font-mono text-[10px] text-white/35">
+              {data.wallets.solana ? (
+                <span title={data.wallets.solana}>SOL {compactAddress(data.wallets.solana)}</span>
+              ) : null}
+              {data.wallets.solana && data.wallets.evm ? ' · ' : null}
+              {data.wallets.evm ? (
+                <span title={data.wallets.evm}>EVM {compactAddress(data.wallets.evm)}</span>
+              ) : null}
+            </p>
+          ) : null}
           <HandleSwitcher handle={handle} handles={handles} onSwitch={onSwitch} />
         </div>
 
