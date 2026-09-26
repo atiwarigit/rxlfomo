@@ -1,6 +1,7 @@
 # FOMO dashboard
 
 - Never ship mock PnL as a fallback once live sources are configured. Degrade to wallet-only + warnings.
+- A load where neither FOMO nor on-chain answered must not touch the local peak/equity log (it caused a fake -100% drawdown). Wallets resolved once are cached in the browser config.
 - FOMO wallet resolution costs 2,500 credits — cache the profile when adding refresh timers.
 - Positions endpoint is the source for open/closed trades; `/trades` is deprecated.
 - Cash = SOL + stables. Don't put USDC in the open-risk table.
