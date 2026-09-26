@@ -143,10 +143,28 @@ async function rpcBatch<T>(calls: { method: string; params: unknown[] }[], fetch
 
 const cache = new Map<string, { at: number; stats: DripStats }>();
 
+const STALE_OK_MS = 6 * 60 * 60_000;
+
 async function analyzeMint(owner: string, mint: string, fetchFn: typeof fetch, sigLimit: number): Promise<DripStats> {
   const key = `${owner}:${mint}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < DRIP_TTL_MS) return hit.stats;
+  try {
+    return await sampleMint(owner, mint, fetchFn, sigLimit, key);
+  } catch (err) {
+    // A rate-limited resample shouldn't flip a known drip back to "trade".
+    if (hit && Date.now() - hit.at < STALE_OK_MS) return hit.stats;
+    throw err;
+  }
+}
+
+async function sampleMint(
+  owner: string,
+  mint: string,
+  fetchFn: typeof fetch,
+  sigLimit: number,
+  key: string,
+): Promise<DripStats> {
 
   const [accts] = await rpcBatch<{ value: { pubkey: string; account: { data: { parsed: { info: { tokenAmount: { uiAmount: number | null } } } } } }[] }>(
     [{ method: 'getTokenAccountsByOwner', params: [owner, { mint }, { encoding: 'jsonParsed' }] }],

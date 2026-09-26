@@ -1082,10 +1082,19 @@ async function rpcBatch(calls, fetchFn) {
   throw lastErr instanceof Error ? lastErr : new Error("Solana RPC batch failed");
 }
 var cache2 = /* @__PURE__ */ new Map();
+var STALE_OK_MS = 6 * 60 * 6e4;
 async function analyzeMint(owner, mint, fetchFn, sigLimit) {
   const key2 = `${owner}:${mint}`;
   const hit = cache2.get(key2);
   if (hit && Date.now() - hit.at < DRIP_TTL_MS) return hit.stats;
+  try {
+    return await sampleMint(owner, mint, fetchFn, sigLimit, key2);
+  } catch (err) {
+    if (hit && Date.now() - hit.at < STALE_OK_MS) return hit.stats;
+    throw err;
+  }
+}
+async function sampleMint(owner, mint, fetchFn, sigLimit, key2) {
   const [accts] = await rpcBatch(
     [{ method: "getTokenAccountsByOwner", params: [owner, { mint }, { encoding: "jsonParsed" }] }],
     fetchFn
