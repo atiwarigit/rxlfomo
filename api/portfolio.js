@@ -856,6 +856,7 @@ async function loadPortfolio(input) {
       fetchFn
     });
   };
+  let fomoOutOfCredits = false;
   if (handle && input.apiKey) {
     const client = createFomoClient({ apiKey: input.apiKey, fetchFn });
     try {
@@ -871,10 +872,18 @@ async function loadPortfolio(input) {
     } catch (err) {
       if (err instanceof FomoApiError && err.code === "auth") {
         warnings.push("FOMO API key rejected (401). Check FOMO_API_KEY.");
+      } else if (err instanceof FomoApiError && err.code === "credits") {
+        fomoOutOfCredits = true;
+        warnings.push(
+          "fomoapi.io is out of credits (402). Top up at fomoapi.io/pricing, or paste your Solana wallet in Sources so the wallet path can still mark the book."
+        );
       } else {
         warnings.push(`Search: ${err instanceof Error ? err.message : "failed"}`);
       }
     }
+  }
+  if (handle && input.apiKey && !fomoOutOfCredits) {
+    const client = createFomoClient({ apiKey: input.apiKey, fetchFn });
     const fomoKey = searchHit?.userId || handle;
     const results = await Promise.allSettled([
       client.resolveUser(handle),
@@ -951,7 +960,7 @@ async function loadPortfolio(input) {
       );
     }
   } else {
-    warnings.push("No Solana wallet yet. FOMO resolution or a manual address is required to mark-to-market on-chain.");
+    warnings.push("No Solana wallet yet. Paste the address in Sources (or set SOLANA_WALLET) so the book loads even when FOMO is down.");
   }
   const mints = [
     ...fomoPositions.map((p) => tokenField(p).address),

@@ -17,7 +17,9 @@ import {
   emptyConfig,
   loadClientConfig,
   mergeEquityLogs,
+  readEquityLog,
   rememberPeak,
+  rememberWallets,
   saveClientConfig,
   type ClientConfig,
 } from './lib/localJournal';
@@ -104,19 +106,29 @@ function App() {
     setError(null);
     try {
       const snap = await fetchPortfolio(cfg);
-      const peak = rememberPeak(snap.summary.totalEquity);
-      snap.summary.peakEquity = Math.max(peak, snap.summary.peakEquity);
-      snap.summary.currentDrawdownPct =
-        snap.summary.peakEquity > 0
-          ? ((snap.summary.totalEquity - snap.summary.peakEquity) / snap.summary.peakEquity) * 100
-          : 0;
-      const today = new Date().toISOString().slice(0, 10);
-      const stored = appendEquityLog({
-        date: today,
-        equity: snap.summary.totalEquity,
-        realizedPnl: snap.summary.realizedPnlAllTime ?? 0,
-      });
-      snap.equityCurve = mergeEquityLogs(snap.equityCurve, stored);
+      const remembered = rememberWallets(cfg, snap.wallets);
+      if (remembered !== cfg) setConfig(remembered);
+      const live = snap.source.fomo || snap.source.onchain;
+      if (live) {
+        const peak = rememberPeak(snap.summary.totalEquity);
+        snap.summary.peakEquity = Math.max(peak, snap.summary.peakEquity);
+        snap.summary.currentDrawdownPct =
+          snap.summary.peakEquity > 0
+            ? ((snap.summary.totalEquity - snap.summary.peakEquity) / snap.summary.peakEquity) * 100
+            : 0;
+        const today = new Date().toISOString().slice(0, 10);
+        const stored = appendEquityLog({
+          date: today,
+          equity: snap.summary.totalEquity,
+          realizedPnl: snap.summary.realizedPnlAllTime ?? 0,
+        });
+        snap.equityCurve = mergeEquityLogs(snap.equityCurve, stored);
+      } else {
+        snap.equityCurve = mergeEquityLogs([], readEquityLog());
+        setError(
+          'No live source answered (see warnings). Paste your Solana address in Sources to load the book from chain while FOMO is down. The curve below is your last good history, not a $0 print.',
+        );
+      }
       setData(snap);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load portfolio');

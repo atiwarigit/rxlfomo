@@ -56,6 +56,18 @@ export function saveClientConfig(cfg: ClientConfig) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
 }
 
+export function rememberWallets(cfg: ClientConfig, wallets: { solana?: string; evm?: string }): ClientConfig {
+  const next = {
+    ...cfg,
+    solanaWallet: cfg.solanaWallet || wallets.solana || '',
+    evmWallet: cfg.evmWallet || wallets.evm || '',
+  };
+  if (next.solanaWallet !== cfg.solanaWallet || next.evmWallet !== cfg.evmWallet) {
+    saveClientConfig(next);
+  }
+  return next;
+}
+
 export function rememberPeak(equity: number): number {
   const prev = Number(localStorage.getItem(PEAK_KEY) || 0);
   const peak = Math.max(prev, equity, 0);
@@ -63,13 +75,17 @@ export function rememberPeak(equity: number): number {
   return peak;
 }
 
-export function appendEquityLog(point: EquityPoint): EquityPoint[] {
-  let log: EquityPoint[] = [];
+export function readEquityLog(): EquityPoint[] {
   try {
-    log = JSON.parse(localStorage.getItem(CURVE_KEY) || '[]') as EquityPoint[];
+    const log = JSON.parse(localStorage.getItem(CURVE_KEY) || '[]') as EquityPoint[];
+    return log.filter((p) => p.equity > 0);
   } catch {
-    log = [];
+    return [];
   }
+}
+
+export function appendEquityLog(point: EquityPoint): EquityPoint[] {
+  const log = readEquityLog();
   const filtered = log.filter((p) => p.date !== point.date);
   filtered.push(point);
   filtered.sort((a, b) => a.date.localeCompare(b.date));
