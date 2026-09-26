@@ -83,6 +83,7 @@ export function rememberWallets(handle: string, wallets: WalletPair) {
   if (!key || (!wallets.solana && !wallets.evm)) return;
   const book = readWalletBook();
   const prev = book[key] ?? {};
+  // The server's answer is authoritative, so a changed default replaces the old hint.
   book[key] = { solana: wallets.solana || prev.solana, evm: wallets.evm || prev.evm };
   localStorage.setItem(WALLETS_KEY, JSON.stringify(book));
 }

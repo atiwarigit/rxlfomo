@@ -1493,7 +1493,7 @@ async function loadPortfolio(input) {
 // server/knownWallets.ts
 var KNOWN = {
   busymeredog: {
-    solana: "7G4MHQzKBdiMuwW1E2cCpEti8wQDxd8gj8rjS3kyF67b",
+    solana: "3bkwLLEiF9uvM1c3JBnmUXrCei7r7AezC7Td2riFmfxR",
     evm: "0x06953a582f054b7b7c4c6dd890777e3958b4a673"
   },
   softmereelk: {
@@ -1552,8 +1552,8 @@ async function handler(req, res) {
       evm: process.env.EVM_WALLET || process.env.VITE_EVM_WALLET || ""
     } : { solana: "", evm: "" };
     const known = knownWallets(handle);
-    const solanaWallet = queryValue(req, "solana") || envWallets.solana || known.solana;
-    const evmWallet = queryValue(req, "evm") || envWallets.evm || known.evm;
+    const solanaWallet = queryValue(req, "solana") || envWallets.solana || known.solana || queryValue(req, "solanaHint");
+    const evmWallet = queryValue(req, "evm") || envWallets.evm || known.evm || queryValue(req, "evmHint");
     const apiKey = headerValue(req.headers, "x-fomo-api-key") || process.env.FOMO_API_KEY || process.env.VITE_FOMO_API_KEY || "";
     if (!handle && !solanaWallet) {
       json(res, 400, {

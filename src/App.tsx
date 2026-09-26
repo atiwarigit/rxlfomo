@@ -52,11 +52,11 @@ async function readJson<T>(res: Response): Promise<T> {
 async function fetchPortfolio(cfg: ClientConfig): Promise<PortfolioSnapshot> {
   const params = new URLSearchParams();
   const cached = walletsFor(cfg.handle);
-  const solana = cfg.solanaWallet || cached.solana;
-  const evm = cfg.evmWallet || cached.evm;
   if (cfg.handle) params.set('handle', cfg.handle);
-  if (solana) params.set('solana', solana);
-  if (evm) params.set('evm', evm);
+  if (cfg.solanaWallet) params.set('solana', cfg.solanaWallet);
+  else if (cached.solana) params.set('solanaHint', cached.solana);
+  if (cfg.evmWallet) params.set('evm', cfg.evmWallet);
+  else if (cached.evm) params.set('evmHint', cached.evm);
   const res = await fetch(`/api/portfolio?${params.toString()}`, {
     headers: cfg.apiKey ? { 'x-fomo-api-key': cfg.apiKey } : undefined,
   });

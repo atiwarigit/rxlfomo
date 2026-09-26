@@ -1,6 +1,6 @@
 const KNOWN: Record<string, { solana?: string; evm?: string }> = {
   busymeredog: {
-    solana: '7G4MHQzKBdiMuwW1E2cCpEti8wQDxd8gj8rjS3kyF67b',
+    solana: '3bkwLLEiF9uvM1c3JBnmUXrCei7r7AezC7Td2riFmfxR',
     evm: '0x06953a582f054b7b7c4c6dd890777e3958b4a673',
   },
   softmereelk: {

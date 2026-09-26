@@ -36,8 +36,14 @@ async function handlePortfolio(
       }
     : { solana: '', evm: '' };
   const known = knownWallets(handle);
-  const solanaWallet = url.searchParams.get('solana') || envWallets.solana || known.solana;
-  const evmWallet = url.searchParams.get('evm') || envWallets.evm || known.evm;
+  const solanaWallet =
+    url.searchParams.get('solana') ||
+    envWallets.solana ||
+    known.solana ||
+    url.searchParams.get('solanaHint') ||
+    '';
+  const evmWallet =
+    url.searchParams.get('evm') || envWallets.evm || known.evm || url.searchParams.get('evmHint') || '';
   const apiKey =
     header(req, 'x-fomo-api-key') || env.FOMO_API_KEY || env.VITE_FOMO_API_KEY || '';
 

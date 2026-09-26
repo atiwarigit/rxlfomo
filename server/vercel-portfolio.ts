@@ -62,8 +62,10 @@ export default async function handler(
         }
       : { solana: '', evm: '' };
     const known = knownWallets(handle);
-    const solanaWallet = queryValue(req, 'solana') || envWallets.solana || known.solana;
-    const evmWallet = queryValue(req, 'evm') || envWallets.evm || known.evm;
+    const solanaWallet =
+      queryValue(req, 'solana') || envWallets.solana || known.solana || queryValue(req, 'solanaHint');
+    const evmWallet =
+      queryValue(req, 'evm') || envWallets.evm || known.evm || queryValue(req, 'evmHint');
     const apiKey =
       headerValue(req.headers, 'x-fomo-api-key') ||
       process.env.FOMO_API_KEY ||
