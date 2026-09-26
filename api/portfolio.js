@@ -1454,9 +1454,9 @@ async function tagDrips(open, owner, fetchFn, analyze = analyzeDrips) {
   }
   for (const p of open) p.strategy = p.strategy ?? "trade";
 }
-var RELAY_BUDGET_MS = 22e3;
-var TAGS_BUDGET_MS = 38e3;
-var DRIP_BUDGET_MS = 5e4;
+var RELAY_BUDGET_MS = 15e3;
+var TAGS_BUDGET_MS = 32e3;
+var DRIP_BUDGET_MS = 44e3;
 async function loadPortfolio(input) {
   const startedAt = Date.now();
   const handle = input.handle?.replace(/^@/, "").trim();

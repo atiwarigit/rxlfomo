@@ -396,9 +396,9 @@ export async function tagDrips(
 }
 
 // Serverless functions stop at 60s; optional enrichment has to fit inside that.
-const RELAY_BUDGET_MS = 22_000;
-const TAGS_BUDGET_MS = 38_000;
-const DRIP_BUDGET_MS = 50_000;
+const RELAY_BUDGET_MS = 15_000;
+const TAGS_BUDGET_MS = 32_000;
+const DRIP_BUDGET_MS = 44_000;
 
 export async function loadPortfolio(input: LoadPortfolioInput): Promise<PortfolioSnapshot> {
   const startedAt = Date.now();
