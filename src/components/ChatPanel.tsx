@@ -6,6 +6,7 @@ import { cn } from '../lib/format';
 
 const PROMPTS = [
   "What's overweight vs the 15% cap?",
+  'Which launchpad / narrative is rotating in?',
   'Walk the 24h tape.',
   'Cash vs open risk — what should I do?',
 ];

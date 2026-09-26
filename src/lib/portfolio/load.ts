@@ -11,8 +11,9 @@ import {
   pnlFromChangePct,
 } from './helpers.ts';
 import { buildAlerts, buildEquityCurve, drawdownPct, statsFromClosed } from './metrics.ts';
-import { positionsFromRelaySwaps } from './relayPositions.ts';
+import { closedFromRelaySwaps, positionsFromRelaySwaps } from './relayPositions.ts';
 import { fetchRelayHistory } from '../relay/api.ts';
+import { fetchTokenMeta, type TokenMeta } from '../launchpad/gecko.ts';
 import type {
   ClosedTrade,
   LoadPortfolioInput,
@@ -300,6 +301,26 @@ function findRank(traders: { handle?: string; rank?: number }[] | undefined, han
   return traders?.find((t) => (t.handle || '').replace(/^@/, '').toLowerCase() === h)?.rank;
 }
 
+async function tagLaunchpads(open: Position[], closed: ClosedTrade[], fetchFn: typeof fetch) {
+  const requests = [...open, ...closed]
+    .filter((p) => p.mint)
+    .map((p) => ({ address: p.mint as string, chain: p.chain, symbol: p.symbol }));
+  let meta = new Map<string, TokenMeta>();
+  try {
+    meta = await fetchTokenMeta(requests, fetchFn);
+  } catch {
+    // tags are optional
+  }
+  for (const row of [...open, ...closed]) {
+    const m = row.mint ? meta.get(row.mint.toLowerCase()) : undefined;
+    if (!m) continue;
+    row.launchpad = m.launchpad.label;
+    row.launchpadId = m.launchpad.id;
+    row.narratives = m.narratives;
+    if ('currentPrice' in row) (row as Position).quoteSymbol = m.quote;
+  }
+}
+
 export async function loadPortfolio(input: LoadPortfolioInput): Promise<PortfolioSnapshot> {
   const handle = input.handle?.replace(/^@/, '').trim();
   const fetchFn = input.fetchFn ?? fetch;
@@ -309,6 +330,7 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
   let fomoPositions: FomoPosition[] = [];
   let fomoHoldings: FomoHolding[] = [];
   let relayOpen: Position[] = [];
+  let relayClosed: ClosedTrade[] = [];
   let closedTotalOnFomo: number | undefined;
   let livePerpPnl = 0;
   let fomoTotalValue: number | undefined;
@@ -436,6 +458,7 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
       const history = await relayPromise;
       if (history.swaps.length) {
         relayOpen = positionsFromRelaySwaps(history.swaps);
+        relayClosed = closedFromRelaySwaps(history.swaps);
         relayOk = true;
       }
       evmWallet = evmWallet || history.evmWallet;
@@ -476,13 +499,14 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     .map((p) => mapOpenPosition(p, markets))
     .filter((p): p is Position => Boolean(p));
 
-  const closed = fomoPositions
+  const fomoClosed = fomoPositions
     .filter((p) => {
       const s = (p.status || '').toLowerCase();
       return s === 'closed' || Boolean(p.closedAt);
     })
     .map(mapClosedTrade)
     .filter((t): t is ClosedTrade => Boolean(t));
+  const closed = fomoClosed.length ? fomoClosed : relayClosed;
 
   const fromBalances = fomoHoldings
     .map((h) => mapHoldingToPosition(h, markets))
@@ -502,6 +526,7 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     );
   }
   const { cash, risk } = splitCash(merged);
+  await tagLaunchpads(risk, closed, fetchFn);
 
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);

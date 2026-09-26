@@ -57,7 +57,7 @@ export function HeroPositionCard({ slot }: Props) {
           </div>
           <div>
             <p className="text-sm font-semibold leading-tight">{slot.label}</p>
-            <p className="text-[11px] capitalize text-white/40">{slot.subtitle}</p>
+            <p className="text-[11px] text-white/40">{slot.subtitle}</p>
           </div>
         </div>
         <div className="text-right">

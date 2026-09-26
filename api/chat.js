@@ -4,6 +4,74 @@
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 
+// src/lib/ops/rotation.ts
+var byLaunchpad = (row) => [
+  { key: row.launchpadId || "unknown", label: row.launchpad || "Unknown" }
+];
+var byNarrative = (row) => {
+  const tags = row.narratives?.length ? row.narratives : ["Untagged"];
+  return tags.map((t) => ({ key: t, label: t }));
+};
+function rollup(open, closed, keyer) {
+  const rows = /* @__PURE__ */ new Map();
+  const get = (key, label) => {
+    const hit = rows.get(key);
+    if (hit) return hit;
+    const fresh = {
+      key,
+      label,
+      openNames: 0,
+      sizeUsd: 0,
+      unrealizedUsd: 0,
+      pnl24hUsd: 0,
+      move24hPct: null,
+      realizedUsd: 0,
+      closes: 0,
+      wins: 0,
+      totalPnlUsd: 0,
+      symbols: [],
+      moveWeight: 0,
+      moveSum: 0
+    };
+    rows.set(key, fresh);
+    return fresh;
+  };
+  for (const p of open) {
+    for (const { key, label } of keyer(p)) {
+      const r = get(key, label);
+      r.openNames += 1;
+      r.sizeUsd += p.sizeUsd;
+      r.unrealizedUsd += p.hasCostBasis ? p.unrealizedPnl : p.pnl24hUsd ?? 0;
+      r.pnl24hUsd += p.pnl24hUsd ?? 0;
+      if (p.change24hPct != null && p.sizeUsd > 0) {
+        r.moveSum += p.change24hPct * p.sizeUsd;
+        r.moveWeight += p.sizeUsd;
+      }
+      if (!r.symbols.includes(p.symbol)) r.symbols.push(p.symbol);
+    }
+  }
+  for (const t of closed) {
+    for (const { key, label } of keyer(t)) {
+      const r = get(key, label);
+      r.realizedUsd += t.realizedPnl;
+      r.closes += 1;
+      if (t.realizedPnl > 0) r.wins += 1;
+      if (!r.symbols.includes(t.symbol)) r.symbols.push(t.symbol);
+    }
+  }
+  return [...rows.values()].map(({ moveWeight, moveSum, ...r }) => ({
+    ...r,
+    move24hPct: moveWeight > 0 ? moveSum / moveWeight : null,
+    totalPnlUsd: r.unrealizedUsd + r.realizedUsd
+  })).sort((a, b) => b.totalPnlUsd - a.totalPnlUsd);
+}
+function launchpadRotation(snap) {
+  return rollup(snap.openPositions, snap.closedTrades, byLaunchpad);
+}
+function narrativeRotation(snap) {
+  return rollup(snap.openPositions, snap.closedTrades, byNarrative);
+}
+
 // src/lib/ai/bookContext.ts
 function compactBook(snap) {
   const s = snap.summary;
@@ -17,10 +85,25 @@ function compactBook(snap) {
     `Sources: fomo=${snap.source.fomo} onchain=${snap.source.onchain} at ${snap.source.fetchedAt}`
   ];
   if (snap.source.warnings.length) lines.push(`Warnings: ${snap.source.warnings.join(" | ")}`);
-  lines.push("Open names (size, 24h, unrealized, basis, chain):");
+  lines.push("Open names (size, 24h, unrealized, basis, chain, launchpad, narratives, paired vs):");
   for (const p of snap.openPositions.slice(0, 16)) {
     lines.push(
-      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? "n/a" : p.change24hPct.toFixed(1) + "%"} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? "yes" : "no"} ${p.chain}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, " ").slice(0, 80)}"` : ""}`
+      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? "n/a" : p.change24hPct.toFixed(1) + "%"} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? "yes" : "no"} ${p.chain} pad=${p.launchpad || "?"} story=${(p.narratives || []).join("/") || "?"}${p.quoteSymbol ? ` vs=${p.quoteSymbol}` : ""}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, " ").slice(0, 80)}"` : ""}`
+    );
+  }
+  const pads = launchpadRotation(snap);
+  if (pads.length) {
+    lines.push("By launchpad (open size, size-weighted 24h, unrealized, realized, wins/closes):");
+    for (const r of pads.slice(0, 8)) {
+      lines.push(
+        `- ${r.label}: ${n(r.sizeUsd)} 24h=${r.move24hPct == null ? "n/a" : r.move24hPct.toFixed(1) + "%"} u=${n(r.unrealizedUsd)} r=${n(r.realizedUsd)} ${r.wins}/${r.closes}`
+      );
+    }
+  }
+  const stories = narrativeRotation(snap);
+  if (stories.length) {
+    lines.push(
+      `By narrative: ${stories.slice(0, 8).map((r) => `${r.label} ${n(r.sizeUsd)} net=${n(r.totalPnlUsd)}`).join(" | ")}`
     );
   }
   if (snap.closedTrades.length) {
@@ -50,6 +133,7 @@ var SYSTEM = `You are the FOMO desk copilot on rxlfomo. You see a live portfolio
 Answer like a trading desk: short, specific, numbered when useful.
 Never invent closed-trade PnL, entries, or fills that are not in the snapshot. If cost basis is missing, say the number is 24h mark-to-market, not all-time PnL.
 Cash = SOL + stables. Flag names >15% of equity and cash <20%.
+Each name carries its launchpad (Pons, Bankr, Pump.fun, Stonk.fun\u2026) and narrative tags; "Stonks" means paired against a tokenized stock. For rotation questions, compare launchpads/narratives by size-weighted 24h move and realized vs unrealized, and say which bucket is heating up or bleeding.
 If the operator asks what to do, give a risk action (trim / hold / wait for cash) rather than a new meme call unless they ask for one.`;
 var ChatConfigError = class extends Error {
   constructor(message) {

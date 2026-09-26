@@ -12,6 +12,7 @@ import { HeaderStrip } from './components/ops/HeaderStrip';
 import { HeroPositionCard } from './components/ops/HeroPositionCard';
 import { SizeBoard } from './components/ops/SizeBoard';
 import { TapeBar } from './components/ops/TapeBar';
+import { RotationPanel } from './components/ops/RotationPanel';
 import {
   appendEquityLog,
   emptyConfig,
@@ -222,6 +223,8 @@ function App() {
             </section>
 
             <TapeBar data={data} />
+
+            <RotationPanel data={data} />
 
             <section className="grid gap-4 lg:grid-cols-3">
               <div className="rounded-2xl border border-white/10 bg-[#0d0f18] p-4 lg:col-span-2">

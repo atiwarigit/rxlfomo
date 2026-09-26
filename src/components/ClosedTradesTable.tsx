@@ -39,7 +39,14 @@ export function ClosedTradesTable({ trades, captured, totalOnFomo }: Props) {
               const win = t.realizedPnl >= 0;
               return (
                 <tr key={t.id} className="hover:bg-white/5">
-                  <td className="px-4 py-3 font-medium">{t.symbol}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium">{t.symbol}</div>
+                    <div className="text-[10px] text-white/40">
+                      {[t.launchpad, ...(t.narratives ?? []).filter((n) => n !== 'Other'), t.notes]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-right">{formatUsd(t.sizeUsd)}</td>
                   <td className="px-4 py-3 text-right">
                     <div className={cn(win ? 'text-emerald-400' : 'text-rose-400')}>

@@ -49,6 +49,25 @@ export function PositionsTable({ positions, totalEquity }: Props) {
                       {p.source}
                     </span>
                   </div>
+                  {(p.launchpad || p.narratives?.length) && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {p.launchpad && (
+                        <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-200">
+                          {p.launchpad}
+                        </span>
+                      )}
+                      {p.narratives?.filter((n) => n !== 'Other').map((n) => (
+                        <span key={n} className="rounded bg-fuchsia-400/10 px-1.5 py-0.5 text-[10px] text-fuchsia-200">
+                          {n}
+                        </span>
+                      ))}
+                      {p.quoteSymbol && (
+                        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/40">
+                          vs {p.quoteSymbol}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {p.thesis && (
                     <div className="mt-0.5 max-w-[220px] truncate text-xs text-white/40">
                       {p.thesis}

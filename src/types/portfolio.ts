@@ -31,6 +31,10 @@ export interface Position {
   pnl24hUsd?: number;
   hasCostBasis?: boolean;
   volume24hUsd?: number;
+  launchpad?: string;
+  launchpadId?: string;
+  narratives?: string[];
+  quoteSymbol?: string;
 }
 
 export interface ClosedTrade {
@@ -50,6 +54,9 @@ export interface ClosedTrade {
   exitDate: string;
   rMultiple?: number;
   notes?: string;
+  launchpad?: string;
+  launchpadId?: string;
+  narratives?: string[];
 }
 
 export interface EquityPoint {

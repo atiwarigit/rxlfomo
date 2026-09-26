@@ -47,18 +47,18 @@ async function getJson(fetchFn, url, apiKey, timeoutMs = 45e3) {
 function createFomoClient(opts) {
   const base = (opts.baseUrl || DEFAULT_BASE).replace(/\/$/, "");
   const fetchFn = opts.fetchFn ?? fetch;
-  const key = opts.apiKey;
+  const key2 = opts.apiKey;
   return {
     resolveUser(handle) {
       const h = encodeURIComponent(handle.replace(/^@/, ""));
-      return getJson(fetchFn, `${base}/v2/users/${h}`, key, 9e4);
+      return getJson(fetchFn, `${base}/v2/users/${h}`, key2, 9e4);
     },
     search(query) {
       const q = encodeURIComponent(query.replace(/^@/, ""));
       return getJson(
         fetchFn,
         `${base}/v2/search?q=${q}&type=traders&limit=5`,
-        key,
+        key2,
         2e4
       );
     },
@@ -67,7 +67,7 @@ function createFomoClient(opts) {
       return getJson(
         fetchFn,
         `${base}/v2/users/${h}/positions?${query}`,
-        key,
+        key2,
         45e3
       );
     },
@@ -76,7 +76,7 @@ function createFomoClient(opts) {
       return getJson(
         fetchFn,
         `${base}/v2/users/${h}/balances`,
-        key,
+        key2,
         45e3
       );
     },
@@ -84,20 +84,20 @@ function createFomoClient(opts) {
       return getJson(
         fetchFn,
         `${base}/v2/leaderboard/${window}?limit=${limit}`,
-        key,
+        key2,
         3e4
       );
     },
     spotlight(handle) {
       const h = encodeURIComponent(handle.replace(/^@/, ""));
-      return getJson(fetchFn, `${base}/v2/users/${h}/spotlight`, key, 2e4);
+      return getJson(fetchFn, `${base}/v2/users/${h}/spotlight`, key2, 2e4);
     },
     relaySwaps(handle) {
       const h = encodeURIComponent(handle.replace(/^@/, ""));
       return getJson(
         fetchFn,
         `${base}/v2/users/${h}/swaps?source=relay&limit=100`,
-        key,
+        key2,
         3e4
       );
     }
@@ -512,15 +512,25 @@ var DUST_USD = 5;
 function tokenKey(address, symbol, chainId) {
   return `${(address || symbol || "").toLowerCase()}::${chainId ?? ""}`;
 }
-function positionsFromRelaySwaps(swaps) {
+function earlier(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return Date.parse(a) <= Date.parse(b) ? a : b;
+}
+function later(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+function accumulate(swaps) {
   const map = /* @__PURE__ */ new Map();
   const bump = (token, chain, fallbackChainId, at, side) => {
     if (!token) return;
     const symbol = token.symbol || "UNKNOWN";
     const address = token.address || symbol;
     const chainId = token.chainId ?? fallbackChainId;
-    const key = tokenKey(address, symbol, chainId);
-    const prev = map.get(key) ?? {
+    const key2 = tokenKey(address, symbol, chainId);
+    const prev = map.get(key2) ?? {
       symbol,
       address,
       chain,
@@ -539,20 +549,25 @@ function positionsFromRelaySwaps(swaps) {
       prev.boughtAmount += amount;
       prev.boughtUsd += usd;
       prev.boughtUsdNow += usdNow || usd;
+      prev.firstBuyAt = earlier(prev.firstBuyAt, at);
     } else {
       prev.soldAmount += amount;
       prev.soldUsd += usd;
+      prev.lastSellAt = later(prev.lastSellAt, at);
     }
     prev.chain = prev.chain || chain;
-    prev.lastAt = at || prev.lastAt;
-    map.set(key, prev);
+    prev.lastAt = later(prev.lastAt, at);
+    map.set(key2, prev);
   };
   for (const swap of swaps) {
     bump(swap.tokenOut, swap.toChain || swap.chain, swap.chainId, swap.at, "buy");
     bump(swap.tokenIn, swap.fromChain || swap.chain, swap.tokenIn?.chainId ?? swap.chainId, swap.at, "sell");
   }
+  return map;
+}
+function positionsFromRelaySwaps(swaps) {
   const out = [];
-  for (const row of map.values()) {
+  for (const row of accumulate(swaps).values()) {
     const remaining = row.boughtAmount - row.soldAmount;
     if (remaining <= 0) continue;
     const frac = row.boughtAmount > 0 ? remaining / row.boughtAmount : 0;
@@ -576,10 +591,44 @@ function positionsFromRelaySwaps(swaps) {
       currentMcap: 0,
       unrealizedPnl: unrealized,
       unrealizedPnlPct: cost > 0 ? unrealized / cost * 100 : 0,
-      holdTimeHours: 0,
-      entryDate: row.lastAt || (/* @__PURE__ */ new Date()).toISOString(),
+      holdTimeHours: hoursBetween(row.firstBuyAt),
+      entryDate: row.firstBuyAt || row.lastAt || (/* @__PURE__ */ new Date()).toISOString(),
       source: "fomo",
       hasCostBasis: cost > 0
+    });
+  }
+  return out;
+}
+function closedFromRelaySwaps(swaps) {
+  const out = [];
+  for (const row of accumulate(swaps).values()) {
+    if (isCashAsset(row.symbol, row.address)) continue;
+    if (row.boughtAmount <= 0 || row.soldAmount <= 0) continue;
+    const matched = Math.min(row.soldAmount, row.boughtAmount);
+    const soldFrac = matched / row.boughtAmount;
+    const cost = row.boughtUsd * soldFrac;
+    if (cost <= 0) continue;
+    const proceeds = row.soldUsd * (matched / row.soldAmount);
+    const realized = proceeds - cost;
+    const remainingFrac = 1 - soldFrac;
+    const entryPrice = row.boughtUsd / row.boughtAmount;
+    const exitPrice = proceeds / matched;
+    out.push({
+      id: `relay-close-${row.address}`,
+      token: row.symbol,
+      symbol: row.symbol,
+      mint: row.address,
+      chain: normalizeChain(row.chain, row.chainId),
+      side: "long",
+      sizeUsd: cost,
+      entryPrice,
+      exitPrice,
+      realizedPnl: realized,
+      realizedPnlPct: realized / cost * 100,
+      holdTimeHours: hoursBetween(row.firstBuyAt, row.lastSellAt),
+      entryDate: row.firstBuyAt || row.lastAt || (/* @__PURE__ */ new Date()).toISOString(),
+      exitDate: row.lastSellAt || row.lastAt || (/* @__PURE__ */ new Date()).toISOString(),
+      notes: remainingFrac > 0.01 ? "partial exit (Relay)" : "Relay"
     });
   }
   return out;
@@ -673,6 +722,200 @@ async function fetchPage(url, fetchFn) {
     }
   }
   return null;
+}
+
+// src/lib/launchpad/classify.ts
+var DEX_TO_LAUNCHPAD = {
+  "pons-v2": { id: "pons", label: "Pons" },
+  "pons-v2-dex": { id: "pons", label: "Pons" },
+  "pons-dot-family": { id: "pons", label: "Pons" },
+  "bankr-robinhood": { id: "bankr", label: "Bankr" },
+  "clanker-robinhood": { id: "clanker", label: "Clanker" },
+  "virtuals-robinhood": { id: "virtuals", label: "Virtuals" },
+  hoodit: { id: "hoodit", label: "Hoodit" },
+  "o1-launchpad-robinhood": { id: "o1", label: "O1" },
+  "mint-club-robinhood": { id: "mint-club", label: "Mint Club" },
+  "easya-kickstart-robinhood": { id: "easya", label: "EasyA Kickstart" },
+  "pump-fun": { id: "pumpfun", label: "Pump.fun" },
+  pumpswap: { id: "pumpfun", label: "Pump.fun" },
+  "letsbonk-fun": { id: "letsbonk", label: "LetsBonk" },
+  "raydium-launchlab": { id: "launchlab", label: "Raydium LaunchLab" },
+  "bags-fm": { id: "bags", label: "Bags" },
+  stonkfun: { id: "stonkfun", label: "Stonk.fun" },
+  "boop-fun": { id: "boop", label: "Boop" },
+  moonshot: { id: "moonshot", label: "Moonshot" },
+  moonit: { id: "moonshot", label: "Moonshot" },
+  heaven: { id: "heaven", label: "Heaven" },
+  "meteora-dbc": { id: "meteora-dbc", label: "Meteora DBC" },
+  clanker: { id: "clanker", label: "Clanker" },
+  "virtuals-base": { id: "virtuals", label: "Virtuals" },
+  "zora-base": { id: "zora", label: "Zora" },
+  "four-meme": { id: "four-meme", label: "Four.meme" }
+};
+var MINT_SUFFIX = [
+  ["pump", { id: "pumpfun", label: "Pump.fun" }],
+  ["bonk", { id: "letsbonk", label: "LetsBonk" }],
+  ["bags", { id: "bags", label: "Bags" }],
+  ["stonk", { id: "stonkfun", label: "Stonk.fun" }],
+  ["ansem", { id: "ansem", label: "Ansem" }],
+  ["moon", { id: "moonshot", label: "Moonshot" }],
+  ["boop", { id: "boop", label: "Boop" }]
+];
+var DIRECT_LAUNCH = { id: "direct", label: "Direct / DEX" };
+function launchpadFromDexIds(dexIds) {
+  for (const id of dexIds) {
+    const hit = DEX_TO_LAUNCHPAD[id];
+    if (hit) return hit;
+  }
+  return void 0;
+}
+function launchpadFromMint(mint) {
+  if (!mint || mint.startsWith("0x")) return void 0;
+  const lower = mint.toLowerCase();
+  return MINT_SUFFIX.find(([suffix]) => lower.endsWith(suffix))?.[1];
+}
+var STOCK_TICKERS = /* @__PURE__ */ new Set([
+  "SPY",
+  "QQQ",
+  "META",
+  "TSLA",
+  "NVDA",
+  "AAPL",
+  "AMZN",
+  "GOOGL",
+  "GOOG",
+  "MSFT",
+  "HOOD",
+  "AMC",
+  "GME",
+  "COIN",
+  "MSTR",
+  "SGOV",
+  "PLTR",
+  "NFLX",
+  "AMD",
+  "INTC",
+  "BABA",
+  "DIS",
+  "UBER",
+  "CRCL",
+  "IWM",
+  "DIA",
+  "TLT",
+  "GLD",
+  "SLV",
+  "ARKK",
+  "SOFI",
+  "RDDT",
+  "SMCI",
+  "AVGO",
+  "ORCL"
+]);
+var NARRATIVES = [
+  {
+    tag: "Stonks",
+    test: ({ symbol, name, quote }) => STOCK_TICKERS.has(quote.toUpperCase()) || /stonk|stock/i.test(`${symbol} ${name}`)
+  },
+  { tag: "Muse", test: ({ symbol, name, quote }) => /muse/i.test(`${symbol} ${name} ${quote}`) },
+  {
+    tag: "AI / agents",
+    test: ({ symbol, name }) => /\b(ai|gpt|agents?|llm)\b|bot|402/i.test(`${symbol} ${name}`)
+  },
+  {
+    tag: "RWA / tokenization",
+    test: ({ symbol, name }) => /tokeniz|rwa|debt|treasur|bond|yield/i.test(`${symbol} ${name}`)
+  },
+  {
+    tag: "Animals",
+    test: ({ symbol, name }) => /dog|doge|cat|bear|frog|pepe|\bape\b|monkey|bull|penguin|inu|shib|wif/i.test(`${symbol} ${name}`)
+  },
+  {
+    tag: "CT figures",
+    test: ({ symbol, name }) => /ansem|vlad|tenev|elon|trump|saylor|cz\b/i.test(`${symbol} ${name}`)
+  }
+];
+function narrativesFor(input) {
+  const t = { symbol: input.symbol || "", name: input.name || "", quote: input.quote || "" };
+  const tags = NARRATIVES.filter((n) => n.test(t)).map((n) => n.tag);
+  return tags.length ? tags : ["Other"];
+}
+
+// src/lib/launchpad/gecko.ts
+var GT = "https://api.geckoterminal.com/api/v2/networks";
+var NETWORK = {
+  solana: "solana",
+  robinhood: "robinhood",
+  base: "base",
+  ethereum: "eth",
+  bnb: "bsc"
+};
+var cache = /* @__PURE__ */ new Map();
+function quoteFromPoolName(poolName, symbol) {
+  if (!poolName) return void 0;
+  const sides = poolName.split("/").map((s) => s.trim().split(/\s+/)[0]);
+  if (sides.length < 2) return void 0;
+  const other = sides.find((s) => s.toLowerCase() !== symbol.toLowerCase());
+  return other || sides[1];
+}
+function metaFromGecko(token, pools) {
+  const symbol = token.attributes?.symbol || "";
+  const name = token.attributes?.name || "";
+  const top = (token.relationships?.top_pools?.data ?? []).map((p) => pools.get(p.id)).filter((p) => Boolean(p));
+  const dexIds = top.map((p) => p.relationships?.dex?.data?.id || "").filter(Boolean);
+  const launchpad = launchpadFromDexIds(dexIds) || launchpadFromMint(token.attributes?.address) || DIRECT_LAUNCH;
+  const quote = quoteFromPoolName(top[0]?.attributes?.name, symbol);
+  return { launchpad, quote, name, narratives: narrativesFor({ symbol, name, quote }) };
+}
+var key = (chain, address) => `${chain}:${address.toLowerCase()}`;
+async function fetchTokenMeta(requests, fetchFn = fetch) {
+  const out = /* @__PURE__ */ new Map();
+  const byNetwork = /* @__PURE__ */ new Map();
+  for (const r of requests) {
+    if (!r.address) continue;
+    const k = key(String(r.chain), r.address);
+    const hit = cache.get(k);
+    if (hit) {
+      out.set(r.address.toLowerCase(), hit);
+      continue;
+    }
+    const net = NETWORK[r.chain];
+    if (!net) continue;
+    const list = byNetwork.get(net) ?? [];
+    if (!list.some((x) => x.address.toLowerCase() === r.address.toLowerCase())) list.push(r);
+    byNetwork.set(net, list);
+  }
+  for (const [net, list] of byNetwork) {
+    for (let i = 0; i < list.length; i += 30) {
+      const chunk = list.slice(i, i + 30);
+      try {
+        const res = await fetchFn(
+          `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(",")}?include=top_pools`,
+          { signal: AbortSignal.timeout(12e3), headers: { accept: "application/json" } }
+        );
+        if (!res.ok) continue;
+        const body = await res.json();
+        const pools = new Map((body.included ?? []).map((p) => [p.id, p]));
+        for (const t of body.data ?? []) {
+          const addr = t.attributes?.address?.toLowerCase();
+          if (!addr) continue;
+          const meta = metaFromGecko(t, pools);
+          const req = chunk.find((c) => c.address.toLowerCase() === addr);
+          cache.set(key(String(req?.chain ?? net), addr), meta);
+          out.set(addr, meta);
+        }
+      } catch {
+      }
+    }
+  }
+  for (const r of requests) {
+    const addr = r.address?.toLowerCase();
+    if (!addr || out.has(addr)) continue;
+    const launchpad = launchpadFromMint(r.address);
+    if (launchpad) {
+      out.set(addr, { launchpad, narratives: narrativesFor({ symbol: r.symbol }) });
+    }
+  }
+  return out;
 }
 
 // src/lib/portfolio/load.ts
@@ -884,13 +1127,13 @@ function mergePositions(fomo, onchain) {
       noMint.push(p);
       continue;
     }
-    const key = p.mint.toLowerCase();
-    const existing = byMint.get(key);
+    const key2 = p.mint.toLowerCase();
+    const existing = byMint.get(key2);
     if (!existing) {
-      byMint.set(key, p);
+      byMint.set(key2, p);
       continue;
     }
-    byMint.set(key, {
+    byMint.set(key2, {
       ...existing,
       sizeUsd: Math.max(existing.sizeUsd, p.sizeUsd),
       amount: p.amount || existing.amount,
@@ -920,6 +1163,22 @@ function findRank(traders, handle) {
   const h = handle.replace(/^@/, "").toLowerCase();
   return traders?.find((t) => (t.handle || "").replace(/^@/, "").toLowerCase() === h)?.rank;
 }
+async function tagLaunchpads(open, closed, fetchFn) {
+  const requests = [...open, ...closed].filter((p) => p.mint).map((p) => ({ address: p.mint, chain: p.chain, symbol: p.symbol }));
+  let meta = /* @__PURE__ */ new Map();
+  try {
+    meta = await fetchTokenMeta(requests, fetchFn);
+  } catch {
+  }
+  for (const row of [...open, ...closed]) {
+    const m = row.mint ? meta.get(row.mint.toLowerCase()) : void 0;
+    if (!m) continue;
+    row.launchpad = m.launchpad.label;
+    row.launchpadId = m.launchpad.id;
+    row.narratives = m.narratives;
+    if ("currentPrice" in row) row.quoteSymbol = m.quote;
+  }
+}
 async function loadPortfolio(input) {
   const handle = input.handle?.replace(/^@/, "").trim();
   const fetchFn = input.fetchFn ?? fetch;
@@ -929,6 +1188,7 @@ async function loadPortfolio(input) {
   let fomoPositions = [];
   let fomoHoldings = [];
   let relayOpen = [];
+  let relayClosed = [];
   let closedTotalOnFomo;
   let livePerpPnl = 0;
   let fomoTotalValue;
@@ -1048,6 +1308,7 @@ async function loadPortfolio(input) {
       const history = await relayPromise;
       if (history.swaps.length) {
         relayOpen = positionsFromRelaySwaps(history.swaps);
+        relayClosed = closedFromRelaySwaps(history.swaps);
         relayOk = true;
       }
       evmWallet = evmWallet || history.evmWallet;
@@ -1081,10 +1342,11 @@ async function loadPortfolio(input) {
     fetchSolPriceUsd(fetchFn)
   ]);
   const openFromFomo = fomoPositions.filter(isOpenRow).map((p) => mapOpenPosition(p, markets)).filter((p) => Boolean(p));
-  const closed = fomoPositions.filter((p) => {
+  const fomoClosed = fomoPositions.filter((p) => {
     const s = (p.status || "").toLowerCase();
     return s === "closed" || Boolean(p.closedAt);
   }).map(mapClosedTrade).filter((t) => Boolean(t));
+  const closed = fomoClosed.length ? fomoClosed : relayClosed;
   const fromBalances = fomoHoldings.map((h) => mapHoldingToPosition(h, markets)).filter((p) => Boolean(p));
   const fromChain = onchain.map((h) => mapOnchainPosition(h, markets, solPrice)).filter((p) => Boolean(p));
   const fromRelay = relayOpen.map((p) => withMarketMove(p, markets));
@@ -1097,6 +1359,7 @@ async function loadPortfolio(input) {
     );
   }
   const { cash, risk } = splitCash(merged);
+  await tagLaunchpads(risk, closed, fetchFn);
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
   const hasCostBasis = risk.some((p) => p.hasCostBasis);

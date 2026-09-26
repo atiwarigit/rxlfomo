@@ -20,7 +20,9 @@ export function heroSlots(snap: PortfolioSnapshot, n = 3): HeroSlot[] {
     sizeUsd: position.sizeUsd,
     equity,
     label: position.symbol,
-    subtitle: position.token && position.token !== position.symbol ? position.token : position.chain,
+    subtitle:
+      [position.launchpad, position.narratives?.find((n) => n !== 'Other')].filter(Boolean).join(' · ') ||
+      (position.token && position.token !== position.symbol ? position.token : position.chain),
   }));
   if (raw.length < n) {
     raw.push({

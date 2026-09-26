@@ -1,4 +1,5 @@
 import type { PortfolioSnapshot } from '../../types/portfolio.ts';
+import { launchpadRotation, narrativeRotation } from '../ops/rotation.ts';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -17,10 +18,28 @@ export function compactBook(snap: PortfolioSnapshot): string {
     `Sources: fomo=${snap.source.fomo} onchain=${snap.source.onchain} at ${snap.source.fetchedAt}`,
   ];
   if (snap.source.warnings.length) lines.push(`Warnings: ${snap.source.warnings.join(' | ')}`);
-  lines.push('Open names (size, 24h, unrealized, basis, chain):');
+  lines.push('Open names (size, 24h, unrealized, basis, chain, launchpad, narratives, paired vs):');
   for (const p of snap.openPositions.slice(0, 16)) {
     lines.push(
-      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? 'n/a' : p.change24hPct.toFixed(1) + '%'} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? 'yes' : 'no'} ${p.chain}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, ' ').slice(0, 80)}"` : ''}`,
+      `- ${p.symbol} ${n(p.sizeUsd)} 24h=${p.change24hPct == null ? 'n/a' : p.change24hPct.toFixed(1) + '%'} u=${n(p.unrealizedPnl)} basis=${p.hasCostBasis ? 'yes' : 'no'} ${p.chain} pad=${p.launchpad || '?'} story=${(p.narratives || []).join('/') || '?'}${p.quoteSymbol ? ` vs=${p.quoteSymbol}` : ''}${p.thesis ? ` thesis="${p.thesis.replace(/\s+/g, ' ').slice(0, 80)}"` : ''}`,
+    );
+  }
+  const pads = launchpadRotation(snap);
+  if (pads.length) {
+    lines.push('By launchpad (open size, size-weighted 24h, unrealized, realized, wins/closes):');
+    for (const r of pads.slice(0, 8)) {
+      lines.push(
+        `- ${r.label}: ${n(r.sizeUsd)} 24h=${r.move24hPct == null ? 'n/a' : r.move24hPct.toFixed(1) + '%'} u=${n(r.unrealizedUsd)} r=${n(r.realizedUsd)} ${r.wins}/${r.closes}`,
+      );
+    }
+  }
+  const stories = narrativeRotation(snap);
+  if (stories.length) {
+    lines.push(
+      `By narrative: ${stories
+        .slice(0, 8)
+        .map((r) => `${r.label} ${n(r.sizeUsd)} net=${n(r.totalPnlUsd)}`)
+        .join(' | ')}`,
     );
   }
   if (snap.closedTrades.length) {
