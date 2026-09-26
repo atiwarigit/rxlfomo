@@ -1411,7 +1411,7 @@ async function tagLaunchpads(open, closed, markets, fetchFn, deadlineAt) {
     row.launchpad = m.launchpad.label;
     row.launchpadId = m.launchpad.id;
     row.narratives = m.narratives;
-    if ("currentPrice" in row) row.quoteSymbol = m.quote;
+    if ("currentPrice" in row) row.quoteSymbol = m.quote || row.quoteSymbol;
   }
 }
 function symbolKey(s) {
@@ -1638,15 +1638,17 @@ async function loadPortfolio(input) {
     );
   }
   const { cash, risk } = splitCash(merged);
-  await tagLaunchpads(risk, closed, markets, fetchFn, startedAt + TAGS_BUDGET_MS);
-  if (solanaWallet && onchainOk && Date.now() < startedAt + DRIP_BUDGET_MS - 8e3) {
-    await tagDrips(
+  for (const p of risk) p.quoteSymbol = p.quoteSymbol || marketFor(p.mint, markets)?.quoteSymbol;
+  await Promise.all([
+    tagLaunchpads(risk, closed, markets, fetchFn, startedAt + TAGS_BUDGET_MS),
+    solanaWallet && onchainOk && Date.now() < startedAt + DRIP_BUDGET_MS - 8e3 ? tagDrips(
       risk,
       solanaWallet,
       fetchFn,
       (owner, mints2, f) => analyzeDrips(owner, mints2, f, 25, startedAt + DRIP_BUDGET_MS)
-    );
-  }
+    ) : Promise.resolve()
+  ]);
+  for (const p of risk) p.strategy = p.strategy ?? "trade";
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
   const hasCostBasis = risk.some((p) => p.hasCostBasis);

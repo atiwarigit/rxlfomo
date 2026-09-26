@@ -337,7 +337,7 @@ async function tagLaunchpads(
     row.launchpad = m.launchpad.label;
     row.launchpadId = m.launchpad.id;
     row.narratives = m.narratives;
-    if ('currentPrice' in row) (row as Position).quoteSymbol = m.quote;
+    if ('currentPrice' in row) (row as Position).quoteSymbol = m.quote || (row as Position).quoteSymbol;
   }
 }
 
@@ -608,12 +608,18 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     );
   }
   const { cash, risk } = splitCash(merged);
-  await tagLaunchpads(risk, closed, markets, fetchFn, startedAt + TAGS_BUDGET_MS);
-  if (solanaWallet && onchainOk && Date.now() < startedAt + DRIP_BUDGET_MS - 8_000) {
-    await tagDrips(risk, solanaWallet, fetchFn, (owner, mints, f) =>
-      analyzeDrips(owner, mints, f, 25, startedAt + DRIP_BUDGET_MS),
-    );
-  }
+  // Dex already knows each pool's pairing, which is all drip detection needs, so it can run
+  // alongside the slower GeckoTerminal launchpad lookup instead of after it.
+  for (const p of risk) p.quoteSymbol = p.quoteSymbol || marketFor(p.mint, markets)?.quoteSymbol;
+  await Promise.all([
+    tagLaunchpads(risk, closed, markets, fetchFn, startedAt + TAGS_BUDGET_MS),
+    solanaWallet && onchainOk && Date.now() < startedAt + DRIP_BUDGET_MS - 8_000
+      ? tagDrips(risk, solanaWallet, fetchFn, (owner, mints, f) =>
+          analyzeDrips(owner, mints, f, 25, startedAt + DRIP_BUDGET_MS),
+        )
+      : Promise.resolve(),
+  ]);
+  for (const p of risk) p.strategy = p.strategy ?? 'trade';
 
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
