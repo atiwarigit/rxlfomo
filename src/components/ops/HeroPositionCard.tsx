@@ -41,7 +41,7 @@ export function HeroPositionCard({ slot }: Props) {
   return (
     <article
       className={cn(
-        'flex min-h-[420px] flex-col rounded-2xl border bg-[#0d0f18] p-4',
+        'flex flex-col rounded-2xl border bg-[#0d0f18] p-4',
         theme.border,
       )}
     >
@@ -102,7 +102,7 @@ export function HeroPositionCard({ slot }: Props) {
         </p>
       )}
 
-      <div className="relative mt-3 h-36 w-full">
+      <div className="relative mt-3 h-28 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
@@ -130,7 +130,7 @@ export function HeroPositionCard({ slot }: Props) {
         </span>
       </div>
 
-      <div className="mt-auto space-y-2 pt-3">
+      <div className="space-y-2 pt-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">
           Last call
         </p>

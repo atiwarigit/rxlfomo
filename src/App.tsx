@@ -233,11 +233,15 @@ function App() {
           <>
             <AlertsBar alerts={data.alerts} />
 
-            <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="grid gap-3 md:grid-cols-3">
-                {heroes.map((slot) => (
-                  <HeroPositionCard key={`${slot.kind}-${slot.label}-${slot.rank}`} slot={slot} />
-                ))}
+            <section className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="flex min-w-0 flex-col gap-3">
+                <div className="grid items-start gap-3 md:grid-cols-3">
+                  {heroes.map((slot) => (
+                    <HeroPositionCard key={`${slot.kind}-${slot.label}-${slot.rank}`} slot={slot} />
+                  ))}
+                </div>
+                <TapeBar data={data} />
+                <RotationPanel data={data} />
               </div>
               <div className="flex min-h-0 flex-col gap-3">
                 <SizeBoard data={data} />
@@ -252,10 +256,6 @@ function App() {
                 />
               </div>
             </section>
-
-            <TapeBar data={data} />
-
-            <RotationPanel data={data} />
 
             <section className="grid gap-4 lg:grid-cols-3">
               <div className="rounded-2xl border border-white/10 bg-[#0d0f18] p-4 lg:col-span-2">

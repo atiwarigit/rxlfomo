@@ -11,14 +11,14 @@ const TONE: Record<DecisionEvent['tone'], string> = {
 
 export function DecisionStream({ events }: { events: DecisionEvent[] }) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/10 bg-[#0d0f18]">
+    <section className="flex flex-col rounded-2xl border border-white/10 bg-[#0d0f18]">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
         <h3 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/45">
           Decision stream
         </h3>
         <span className="font-mono text-[10px] text-white/35">{events.length} live</span>
       </div>
-      <div className="min-h-[220px] flex-1 space-y-1 overflow-y-auto p-2">
+      <div className="max-h-[260px] space-y-1 overflow-y-auto p-2">
         {events.length === 0 ? (
           <p className="px-2 py-8 text-center text-xs text-white/35">No tape yet. Load a book.</p>
         ) : (
