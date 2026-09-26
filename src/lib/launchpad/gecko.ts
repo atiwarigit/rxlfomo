@@ -4,6 +4,7 @@ import {
   launchpadFromDexIds,
   launchpadFromMint,
   narrativesFor,
+  pairLaunch,
   type LaunchpadInfo,
 } from './classify.ts';
 
@@ -59,9 +60,12 @@ export function metaFromGecko(token: GtToken, pools: Map<string, GtPool>): Token
     .map((p) => pools.get(p.id))
     .filter((p): p is GtPool => Boolean(p));
   const dexIds = top.map((p) => p.relationships?.dex?.data?.id || '').filter(Boolean);
-  const launchpad =
-    launchpadFromDexIds(dexIds) || launchpadFromMint(token.attributes?.address) || DIRECT_LAUNCH;
   const quote = quoteFromPoolName(top[0]?.attributes?.name, symbol);
+  const launchpad =
+    launchpadFromDexIds(dexIds) ||
+    launchpadFromMint(token.attributes?.address) ||
+    pairLaunch(quote) ||
+    DIRECT_LAUNCH;
   return { launchpad, quote, name, narratives: narrativesFor({ symbol, name, quote }) };
 }
 

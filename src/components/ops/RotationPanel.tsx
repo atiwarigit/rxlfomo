@@ -9,10 +9,21 @@ function tone(v: number | null | undefined) {
   return v > 0 ? 'text-emerald-400' : 'text-rose-400';
 }
 
-function Table({ rows, total }: { rows: RotationRow[]; total: number }) {
-  if (!rows.length) {
+const COLLAPSED_ROWS = 10;
+
+function Table({ rows: allRows, total }: { rows: RotationRow[]; total: number }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!allRows.length) {
     return <p className="py-6 text-center text-xs text-white/40">No tagged names yet.</p>;
   }
+  const ranked = [...allRows].sort(
+    (a, b) => b.sizeUsd + Math.abs(b.totalPnlUsd) - (a.sizeUsd + Math.abs(a.totalPnlUsd)),
+  );
+  const visible = new Set(
+    (expanded ? ranked : ranked.slice(0, COLLAPSED_ROWS)).map((r) => r.key),
+  );
+  const rows = allRows.filter((r) => visible.has(r.key));
+  const hidden = allRows.length - rows.length;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-[12px]">
@@ -62,6 +73,15 @@ function Table({ rows, total }: { rows: RotationRow[]; total: number }) {
           ))}
         </tbody>
       </table>
+      {hidden > 0 || expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 text-[11px] text-white/50 underline-offset-2 hover:text-white hover:underline"
+        >
+          {expanded ? 'Show top buckets' : `Show ${hidden} smaller buckets`}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -109,7 +129,8 @@ export function RotationPanel({ data }: { data: PortfolioSnapshot }) {
       </div>
       <Table rows={rows} total={total} />
       <p className="mt-2 text-[10px] text-white/30">
-        Launchpad from GeckoTerminal pool labels (Pons, Bankr, Pump.fun, Stonk.fun…). Narratives are
+        Launchpad from GeckoTerminal pool labels (Pons, Bankr, Pump.fun, Stonk.fun…); unlabelled pools
+        paired against another token show as “STONK pair”, “wNEAR pair”, etc. Narratives are
         keyword + pairing tags (stock-paired = Stonks). Realized uses the loaded Relay window.
         {view === 'narrative' ? ' A name can sit in more than one narrative.' : ''}
       </p>

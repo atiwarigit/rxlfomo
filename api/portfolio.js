@@ -762,6 +762,31 @@ var MINT_SUFFIX = [
   ["boop", { id: "boop", label: "Boop" }]
 ];
 var DIRECT_LAUNCH = { id: "direct", label: "Direct / DEX" };
+var MAJOR_QUOTES = /* @__PURE__ */ new Set([
+  "SOL",
+  "WSOL",
+  "USDC",
+  "USDT",
+  "USDG",
+  "USD1",
+  "PYUSD",
+  "ETH",
+  "WETH",
+  "WBNB",
+  "BNB",
+  "DAI",
+  "USDS"
+]);
+function pairLaunch(quote) {
+  const q = (quote || "").trim();
+  if (!q || MAJOR_QUOTES.has(q.toUpperCase())) return void 0;
+  if (isStockTicker(q)) return { id: "pair:stocks", label: "Stock pair" };
+  return { id: `pair:${q.toLowerCase()}`, label: `${q} pair` };
+}
+function isStockTicker(symbol) {
+  const s = symbol.trim();
+  return STOCK_TICKERS.has(s.toUpperCase()) || STOCK_TICKERS.has(s.replace(/[a-z]+$/, "").toUpperCase());
+}
 function launchpadFromDexIds(dexIds) {
   for (const id of dexIds) {
     const hit = DEX_TO_LAUNCHPAD[id];
@@ -814,7 +839,12 @@ var STOCK_TICKERS = /* @__PURE__ */ new Set([
 var NARRATIVES = [
   {
     tag: "Stonks",
-    test: ({ symbol, name, quote }) => STOCK_TICKERS.has(quote.toUpperCase()) || /stonk|stock/i.test(`${symbol} ${name}`)
+    test: ({ symbol, name, quote }) => quote !== "" && isStockTicker(quote) || /stonk|stock/i.test(`${symbol} ${name} ${quote}`)
+  },
+  { tag: "NEAR", test: ({ symbol, name, quote }) => /near/i.test(`${symbol} ${name} ${quote}`) },
+  {
+    tag: "Privacy",
+    test: ({ symbol, name, quote }) => /\b(w?zec|w?xmr)\b|zcash|monero|privacy/i.test(`${symbol} ${name} ${quote}`)
   },
   { tag: "Muse", test: ({ symbol, name, quote }) => /muse/i.test(`${symbol} ${name} ${quote}`) },
   {
@@ -827,7 +857,9 @@ var NARRATIVES = [
   },
   {
     tag: "Animals",
-    test: ({ symbol, name }) => /dog|doge|cat|bear|frog|pepe|\bape\b|monkey|bull|penguin|inu|shib|wif/i.test(`${symbol} ${name}`)
+    test: ({ symbol, name, quote }) => /dog|doge|cat|bear|frog|pepe|\bape\b|monkey|bull|penguin|inu|shib|wif|bonk|kat\b/i.test(
+      `${symbol} ${name} ${quote}`
+    )
   },
   {
     tag: "CT figures",
@@ -862,8 +894,8 @@ function metaFromGecko(token, pools) {
   const name = token.attributes?.name || "";
   const top = (token.relationships?.top_pools?.data ?? []).map((p) => pools.get(p.id)).filter((p) => Boolean(p));
   const dexIds = top.map((p) => p.relationships?.dex?.data?.id || "").filter(Boolean);
-  const launchpad = launchpadFromDexIds(dexIds) || launchpadFromMint(token.attributes?.address) || DIRECT_LAUNCH;
   const quote = quoteFromPoolName(top[0]?.attributes?.name, symbol);
+  const launchpad = launchpadFromDexIds(dexIds) || launchpadFromMint(token.attributes?.address) || pairLaunch(quote) || DIRECT_LAUNCH;
   return { launchpad, quote, name, narratives: narrativesFor({ symbol, name, quote }) };
 }
 var key = (chain, address) => `${chain}:${address.toLowerCase()}`;
@@ -1444,6 +1476,10 @@ var KNOWN = {
   busymeredog: {
     solana: "7G4MHQzKBdiMuwW1E2cCpEti8wQDxd8gj8rjS3kyF67b",
     evm: "0x06953a582f054b7b7c4c6dd890777e3958b4a673"
+  },
+  softmereelk: {
+    solana: "Ei1dmgYK1av31iuQHzpTx4e7vAg5nXxA9mE7x1Gr34Ao",
+    evm: "0x455ef47a4dd4e682b08d28bd28fdf68f1de38b81"
   }
 };
 function sameHandle(a, b) {

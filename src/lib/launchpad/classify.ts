@@ -43,6 +43,24 @@ const MINT_SUFFIX: [string, LaunchpadInfo][] = [
 
 export const DIRECT_LAUNCH: LaunchpadInfo = { id: 'direct', label: 'Direct / DEX' };
 
+const MAJOR_QUOTES = new Set([
+  'SOL', 'WSOL', 'USDC', 'USDT', 'USDG', 'USD1', 'PYUSD', 'ETH', 'WETH', 'WBNB', 'BNB', 'DAI', 'USDS',
+]);
+
+/** Unlabelled launches paired against another meme/base token form their own rotation bucket. */
+export function pairLaunch(quote?: string): LaunchpadInfo | undefined {
+  const q = (quote || '').trim();
+  if (!q || MAJOR_QUOTES.has(q.toUpperCase())) return undefined;
+  if (isStockTicker(q)) return { id: 'pair:stocks', label: 'Stock pair' };
+  return { id: `pair:${q.toLowerCase()}`, label: `${q} pair` };
+}
+
+/** Tokenized stock symbols, including wrapper suffixes like NVDAc / TSLAx. */
+function isStockTicker(symbol: string): boolean {
+  const s = symbol.trim();
+  return STOCK_TICKERS.has(s.toUpperCase()) || STOCK_TICKERS.has(s.replace(/[a-z]+$/, '').toUpperCase());
+}
+
 export function launchpadFromDexIds(dexIds: string[]): LaunchpadInfo | undefined {
   for (const id of dexIds) {
     const hit = DEX_TO_LAUNCHPAD[id];
@@ -67,7 +85,12 @@ const NARRATIVES: { tag: string; test: (t: { symbol: string; name: string; quote
   {
     tag: 'Stonks',
     test: ({ symbol, name, quote }) =>
-      STOCK_TICKERS.has(quote.toUpperCase()) || /stonk|stock/i.test(`${symbol} ${name}`),
+      (quote !== '' && isStockTicker(quote)) || /stonk|stock/i.test(`${symbol} ${name} ${quote}`),
+  },
+  { tag: 'NEAR', test: ({ symbol, name, quote }) => /near/i.test(`${symbol} ${name} ${quote}`) },
+  {
+    tag: 'Privacy',
+    test: ({ symbol, name, quote }) => /\b(w?zec|w?xmr)\b|zcash|monero|privacy/i.test(`${symbol} ${name} ${quote}`),
   },
   { tag: 'Muse', test: ({ symbol, name, quote }) => /muse/i.test(`${symbol} ${name} ${quote}`) },
   {
@@ -80,8 +103,10 @@ const NARRATIVES: { tag: string; test: (t: { symbol: string; name: string; quote
   },
   {
     tag: 'Animals',
-    test: ({ symbol, name }) =>
-      /dog|doge|cat|bear|frog|pepe|\bape\b|monkey|bull|penguin|inu|shib|wif/i.test(`${symbol} ${name}`),
+    test: ({ symbol, name, quote }) =>
+      /dog|doge|cat|bear|frog|pepe|\bape\b|monkey|bull|penguin|inu|shib|wif|bonk|kat\b/i.test(
+        `${symbol} ${name} ${quote}`,
+      ),
   },
   {
     tag: 'CT figures',

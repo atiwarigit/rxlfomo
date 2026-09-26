@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DIRECT_LAUNCH, launchpadFromDexIds, launchpadFromMint, narrativesFor } from './classify.ts';
+import {
+  DIRECT_LAUNCH,
+  launchpadFromDexIds,
+  launchpadFromMint,
+  narrativesFor,
+  pairLaunch,
+} from './classify.ts';
 import { metaFromGecko } from './gecko.ts';
 
 describe('launchpad detection', () => {
@@ -42,6 +48,34 @@ describe('launchpad detection', () => {
     );
     expect(meta.launchpad).toEqual(DIRECT_LAUNCH);
     expect(meta.narratives).toContain('RWA / tokenization');
+  });
+});
+
+describe('pair launches', () => {
+  it('buckets unlabelled pools by the non-major token they pair against', () => {
+    expect(pairLaunch('STONK')).toEqual({ id: 'pair:stonk', label: 'STONK pair' });
+    expect(pairLaunch('wNEAR')?.label).toBe('wNEAR pair');
+    expect(pairLaunch('AAPL')?.label).toBe('Stock pair');
+    expect(pairLaunch('NVDAc')?.label).toBe('Stock pair');
+    expect(pairLaunch('SOL')).toBeUndefined();
+    expect(pairLaunch('USDC')).toBeUndefined();
+  });
+
+  it('prefers a real launchpad label over the pair bucket', () => {
+    const pools = new Map([
+      ['solana_p', { id: 'solana_p', attributes: { name: 'STONK / KNOTS' }, relationships: { dex: { data: { id: 'raydium' } } } }],
+    ]);
+    const meta = metaFromGecko(
+      { attributes: { address: 'KnotsMint', symbol: 'KNOTS', name: 'Knots' }, relationships: { top_pools: { data: [{ id: 'solana_p' }] } } },
+      pools,
+    );
+    expect(meta.launchpad.label).toBe('STONK pair');
+    expect(meta.narratives).toContain('Stonks');
+  });
+
+  it('tags NEAR and privacy pairings', () => {
+    expect(narrativesFor({ symbol: 'NEARKAT', name: 'Near Kat', quote: 'wNEAR' })).toContain('NEAR');
+    expect(narrativesFor({ symbol: 'ZDOG', name: 'Z Dog', quote: 'ZEC' })).toEqual(['Privacy', 'Animals']);
   });
 });
 
