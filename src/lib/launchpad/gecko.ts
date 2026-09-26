@@ -74,6 +74,7 @@ const key = (chain: string, address: string) => `${chain}:${address.toLowerCase(
 export async function fetchTokenMeta(
   requests: MetaRequest[],
   fetchFn: typeof fetch = fetch,
+  deadlineAt = Number.POSITIVE_INFINITY,
 ): Promise<Map<string, TokenMeta>> {
   const out = new Map<string, TokenMeta>();
   const byNetwork = new Map<string, MetaRequest[]>();
@@ -95,10 +96,15 @@ export async function fetchTokenMeta(
   for (const [net, list] of byNetwork) {
     for (let i = 0; i < list.length; i += 30) {
       const chunk = list.slice(i, i + 30);
+      if (Date.now() > deadlineAt) break;
       try {
         const url = `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(',')}?include=top_pools`;
         let res = await fetchFn(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } });
-        for (let attempt = 1; res.status === 429 && attempt <= 2; attempt++) {
+        for (
+          let attempt = 1;
+          res.status === 429 && attempt <= 2 && Date.now() + 2500 * attempt < deadlineAt;
+          attempt++
+        ) {
           await new Promise((r) => setTimeout(r, 2500 * attempt));
           res = await fetchFn(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } });
         }

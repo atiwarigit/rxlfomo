@@ -308,13 +308,14 @@ async function tagLaunchpads(
   closed: ClosedTrade[],
   markets: Map<string, TokenMarket>,
   fetchFn: typeof fetch,
+  deadlineAt?: number,
 ) {
   const requests = [...open, ...closed]
     .filter((p) => p.mint)
     .map((p) => ({ address: p.mint as string, chain: p.chain, symbol: p.symbol }));
   let meta = new Map<string, TokenMeta>();
   try {
-    meta = await fetchTokenMeta(requests, fetchFn);
+    meta = await fetchTokenMeta(requests, fetchFn, deadlineAt);
   } catch {
     // tags are optional
   }
@@ -394,7 +395,13 @@ export async function tagDrips(
   for (const p of open) p.strategy = p.strategy ?? 'trade';
 }
 
+// Serverless functions stop at 60s; optional enrichment has to fit inside that.
+const RELAY_BUDGET_MS = 22_000;
+const TAGS_BUDGET_MS = 38_000;
+const DRIP_BUDGET_MS = 50_000;
+
 export async function loadPortfolio(input: LoadPortfolioInput): Promise<PortfolioSnapshot> {
+  const startedAt = Date.now();
   const handle = input.handle?.replace(/^@/, '').trim();
   const fetchFn = input.fetchFn ?? fetch;
   const warnings: string[] = [];
@@ -524,7 +531,9 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
   let onchainOk = false;
   startOnchain();
   const relayUser = solanaWallet || evmWallet;
-  const relayPromise = relayUser ? fetchRelayHistory(relayUser, fetchFn) : undefined;
+  const relayPromise = relayUser
+    ? fetchRelayHistory(relayUser, fetchFn, 8, startedAt + RELAY_BUDGET_MS)
+    : undefined;
   let relayOk = false;
   if (relayPromise) {
     try {
@@ -599,8 +608,12 @@ export async function loadPortfolio(input: LoadPortfolioInput): Promise<Portfoli
     );
   }
   const { cash, risk } = splitCash(merged);
-  await tagLaunchpads(risk, closed, markets, fetchFn);
-  if (solanaWallet && onchainOk) await tagDrips(risk, solanaWallet, fetchFn);
+  await tagLaunchpads(risk, closed, markets, fetchFn, startedAt + TAGS_BUDGET_MS);
+  if (solanaWallet && onchainOk && Date.now() < startedAt + DRIP_BUDGET_MS - 8_000) {
+    await tagDrips(risk, solanaWallet, fetchFn, (owner, mints, f) =>
+      analyzeDrips(owner, mints, f, 25, startedAt + DRIP_BUDGET_MS),
+    );
+  }
 
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);

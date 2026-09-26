@@ -189,13 +189,14 @@ export async function analyzeDrips(
   mints: string[],
   fetchFn: typeof fetch = fetch,
   sigLimit = 25,
+  deadlineAt = Number.POSITIVE_INFINITY,
 ): Promise<Map<string, DripStats>> {
   const out = new Map<string, DripStats>();
   const queue = [...new Set(mints)];
   const failed: string[] = [];
   // Two at a time keeps public RPC rate limits happy while halving wall time.
   const worker = async () => {
-    for (let mint = queue.shift(); mint; mint = queue.shift()) {
+    for (let mint = queue.shift(); mint && Date.now() < deadlineAt; mint = queue.shift()) {
       try {
         out.set(mint, await analyzeMint(owner, mint, fetchFn, sigLimit));
       } catch {
@@ -205,6 +206,7 @@ export async function analyzeDrips(
   };
   await Promise.all([worker(), worker()]);
   for (const mint of failed) {
+    if (Date.now() + 4000 > deadlineAt) break;
     await new Promise((r) => setTimeout(r, 1500));
     try {
       out.set(mint, await analyzeMint(owner, mint, fetchFn, sigLimit));

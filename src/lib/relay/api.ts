@@ -94,13 +94,14 @@ export async function fetchRelayHistory(
   user: string,
   fetchFn: typeof fetch = fetch,
   maxPages = 8,
+  deadlineAt = Number.POSITIVE_INFINITY,
 ): Promise<RelayHistory> {
   const key = user.toLowerCase();
   const cached = historyCache.get(key);
   const fresh = cached && Date.now() - cached.at < HISTORY_TTL_MS;
   if (fresh && !cached.history.rateLimited) return cached.history;
   try {
-    const history = await fetchRelayPages(user, fetchFn, maxPages);
+    const history = await fetchRelayPages(user, fetchFn, maxPages, deadlineAt);
     // A rate-limited partial read must not replace a fuller recent one.
     if (cached && history.rateLimited && cached.history.swaps.length > history.swaps.length) {
       return cached.history;
@@ -117,15 +118,20 @@ async function fetchRelayPages(
   user: string,
   fetchFn: typeof fetch,
   maxPages: number,
+  deadlineAt: number,
 ): Promise<RelayHistory> {
   const all: RelayRequest[] = [];
   let continuation: string | undefined;
   let pages = 0;
   let stoppedEarly = false;
   do {
+    if (all.length && Date.now() > deadlineAt) {
+      stoppedEarly = true;
+      break;
+    }
     const params = new URLSearchParams({ user, limit: '50' });
     if (continuation) params.set('continuation', continuation);
-    const body = await fetchPage(`${RELAY_REQUESTS}?${params}`, fetchFn);
+    const body = await fetchPage(`${RELAY_REQUESTS}?${params}`, fetchFn, deadlineAt);
     if (!body) {
       if (!all.length) throw new Error('Relay rate-limited or unavailable');
       stoppedEarly = true;
@@ -144,17 +150,21 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function fetchPage(
   url: string,
   fetchFn: typeof fetch,
+  deadlineAt = Number.POSITIVE_INFINITY,
 ): Promise<{ requests?: RelayRequest[]; continuation?: string } | null> {
   for (let attempt = 0; attempt < 4; attempt++) {
+    let wait = 800 * 2 ** attempt;
     try {
-      const res = await fetchFn(url, { signal: AbortSignal.timeout(15_000) });
+      const res = await fetchFn(url, { signal: AbortSignal.timeout(12_000) });
       if (res.ok) return (await res.json()) as { requests?: RelayRequest[]; continuation?: string };
       if (res.status !== 429 && res.status < 500) return null;
       const retryAfter = Number(res.headers.get('retry-after'));
-      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 5) * 1000 : 800 * 2 ** attempt);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) wait = Math.min(retryAfter, 5) * 1000;
     } catch {
-      await sleep(800 * 2 ** attempt);
+      // retry below
     }
+    if (Date.now() + wait > deadlineAt) return null;
+    await sleep(wait);
   }
   return null;
 }

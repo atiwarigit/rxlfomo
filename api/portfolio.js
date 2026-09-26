@@ -690,13 +690,13 @@ function swapsFromRelayRequests(requests) {
 }
 var HISTORY_TTL_MS = 3 * 6e4;
 var historyCache = /* @__PURE__ */ new Map();
-async function fetchRelayHistory(user, fetchFn = fetch, maxPages = 8) {
+async function fetchRelayHistory(user, fetchFn = fetch, maxPages = 8, deadlineAt = Number.POSITIVE_INFINITY) {
   const key2 = user.toLowerCase();
   const cached = historyCache.get(key2);
   const fresh = cached && Date.now() - cached.at < HISTORY_TTL_MS;
   if (fresh && !cached.history.rateLimited) return cached.history;
   try {
-    const history = await fetchRelayPages(user, fetchFn, maxPages);
+    const history = await fetchRelayPages(user, fetchFn, maxPages, deadlineAt);
     if (cached && history.rateLimited && cached.history.swaps.length > history.swaps.length) {
       return cached.history;
     }
@@ -707,15 +707,19 @@ async function fetchRelayHistory(user, fetchFn = fetch, maxPages = 8) {
     throw err;
   }
 }
-async function fetchRelayPages(user, fetchFn, maxPages) {
+async function fetchRelayPages(user, fetchFn, maxPages, deadlineAt) {
   const all = [];
   let continuation;
   let pages = 0;
   let stoppedEarly = false;
   do {
+    if (all.length && Date.now() > deadlineAt) {
+      stoppedEarly = true;
+      break;
+    }
     const params = new URLSearchParams({ user, limit: "50" });
     if (continuation) params.set("continuation", continuation);
-    const body = await fetchPage(`${RELAY_REQUESTS}?${params}`, fetchFn);
+    const body = await fetchPage(`${RELAY_REQUESTS}?${params}`, fetchFn, deadlineAt);
     if (!body) {
       if (!all.length) throw new Error("Relay rate-limited or unavailable");
       stoppedEarly = true;
@@ -729,17 +733,19 @@ async function fetchRelayPages(user, fetchFn, maxPages) {
   return { ...history, truncated: stoppedEarly || Boolean(continuation), rateLimited: stoppedEarly };
 }
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function fetchPage(url, fetchFn) {
+async function fetchPage(url, fetchFn, deadlineAt = Number.POSITIVE_INFINITY) {
   for (let attempt = 0; attempt < 4; attempt++) {
+    let wait = 800 * 2 ** attempt;
     try {
-      const res = await fetchFn(url, { signal: AbortSignal.timeout(15e3) });
+      const res = await fetchFn(url, { signal: AbortSignal.timeout(12e3) });
       if (res.ok) return await res.json();
       if (res.status !== 429 && res.status < 500) return null;
       const retryAfter = Number(res.headers.get("retry-after"));
-      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 5) * 1e3 : 800 * 2 ** attempt);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) wait = Math.min(retryAfter, 5) * 1e3;
     } catch {
-      await sleep(800 * 2 ** attempt);
     }
+    if (Date.now() + wait > deadlineAt) return null;
+    await sleep(wait);
   }
   return null;
 }
@@ -919,7 +925,7 @@ function metaFromGecko(token, pools) {
   return { launchpad, quote, name, narratives: narrativesFor({ symbol, name, quote }) };
 }
 var key = (chain, address) => `${chain}:${address.toLowerCase()}`;
-async function fetchTokenMeta(requests, fetchFn = fetch) {
+async function fetchTokenMeta(requests, fetchFn = fetch, deadlineAt = Number.POSITIVE_INFINITY) {
   const out = /* @__PURE__ */ new Map();
   const byNetwork = /* @__PURE__ */ new Map();
   for (const r of requests) {
@@ -939,10 +945,11 @@ async function fetchTokenMeta(requests, fetchFn = fetch) {
   for (const [net, list] of byNetwork) {
     for (let i = 0; i < list.length; i += 30) {
       const chunk = list.slice(i, i + 30);
+      if (Date.now() > deadlineAt) break;
       try {
         const url = `${GT}/${net}/tokens/multi/${chunk.map((c) => c.address).join(",")}?include=top_pools`;
         let res = await fetchFn(url, { signal: AbortSignal.timeout(12e3), headers: { accept: "application/json" } });
-        for (let attempt = 1; res.status === 429 && attempt <= 2; attempt++) {
+        for (let attempt = 1; res.status === 429 && attempt <= 2 && Date.now() + 2500 * attempt < deadlineAt; attempt++) {
           await new Promise((r) => setTimeout(r, 2500 * attempt));
           res = await fetchFn(url, { signal: AbortSignal.timeout(12e3), headers: { accept: "application/json" } });
         }
@@ -1110,12 +1117,12 @@ async function analyzeMint(owner, mint, fetchFn, sigLimit) {
   cache2.set(key2, { at: Date.now(), stats });
   return stats;
 }
-async function analyzeDrips(owner, mints, fetchFn = fetch, sigLimit = 25) {
+async function analyzeDrips(owner, mints, fetchFn = fetch, sigLimit = 25, deadlineAt = Number.POSITIVE_INFINITY) {
   const out = /* @__PURE__ */ new Map();
   const queue = [...new Set(mints)];
   const failed = [];
   const worker = async () => {
-    for (let mint = queue.shift(); mint; mint = queue.shift()) {
+    for (let mint = queue.shift(); mint && Date.now() < deadlineAt; mint = queue.shift()) {
       try {
         out.set(mint, await analyzeMint(owner, mint, fetchFn, sigLimit));
       } catch {
@@ -1125,6 +1132,7 @@ async function analyzeDrips(owner, mints, fetchFn = fetch, sigLimit = 25) {
   };
   await Promise.all([worker(), worker()]);
   for (const mint of failed) {
+    if (Date.now() + 4e3 > deadlineAt) break;
     await new Promise((r) => setTimeout(r, 1500));
     try {
       out.set(mint, await analyzeMint(owner, mint, fetchFn, sigLimit));
@@ -1379,11 +1387,11 @@ function findRank(traders, handle) {
   const h = handle.replace(/^@/, "").toLowerCase();
   return traders?.find((t) => (t.handle || "").replace(/^@/, "").toLowerCase() === h)?.rank;
 }
-async function tagLaunchpads(open, closed, markets, fetchFn) {
+async function tagLaunchpads(open, closed, markets, fetchFn, deadlineAt) {
   const requests = [...open, ...closed].filter((p) => p.mint).map((p) => ({ address: p.mint, chain: p.chain, symbol: p.symbol }));
   let meta = /* @__PURE__ */ new Map();
   try {
-    meta = await fetchTokenMeta(requests, fetchFn);
+    meta = await fetchTokenMeta(requests, fetchFn, deadlineAt);
   } catch {
   }
   for (const row of [...open, ...closed]) {
@@ -1446,7 +1454,11 @@ async function tagDrips(open, owner, fetchFn, analyze = analyzeDrips) {
   }
   for (const p of open) p.strategy = p.strategy ?? "trade";
 }
+var RELAY_BUDGET_MS = 22e3;
+var TAGS_BUDGET_MS = 38e3;
+var DRIP_BUDGET_MS = 5e4;
 async function loadPortfolio(input) {
+  const startedAt = Date.now();
   const handle = input.handle?.replace(/^@/, "").trim();
   const fetchFn = input.fetchFn ?? fetch;
   const warnings = [];
@@ -1568,7 +1580,7 @@ async function loadPortfolio(input) {
   let onchainOk = false;
   startOnchain();
   const relayUser = solanaWallet || evmWallet;
-  const relayPromise = relayUser ? fetchRelayHistory(relayUser, fetchFn) : void 0;
+  const relayPromise = relayUser ? fetchRelayHistory(relayUser, fetchFn, 8, startedAt + RELAY_BUDGET_MS) : void 0;
   let relayOk = false;
   if (relayPromise) {
     try {
@@ -1626,8 +1638,15 @@ async function loadPortfolio(input) {
     );
   }
   const { cash, risk } = splitCash(merged);
-  await tagLaunchpads(risk, closed, markets, fetchFn);
-  if (solanaWallet && onchainOk) await tagDrips(risk, solanaWallet, fetchFn);
+  await tagLaunchpads(risk, closed, markets, fetchFn, startedAt + TAGS_BUDGET_MS);
+  if (solanaWallet && onchainOk && Date.now() < startedAt + DRIP_BUDGET_MS - 8e3) {
+    await tagDrips(
+      risk,
+      solanaWallet,
+      fetchFn,
+      (owner, mints2, f) => analyzeDrips(owner, mints2, f, 25, startedAt + DRIP_BUDGET_MS)
+    );
+  }
   const cashUsd = cash.reduce((s, p) => s + p.sizeUsd, 0);
   const openPositionsValue = risk.reduce((s, p) => s + p.sizeUsd, 0);
   const hasCostBasis = risk.some((p) => p.hasCostBasis);
