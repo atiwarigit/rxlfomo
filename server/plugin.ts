@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Connect, Plugin, ViteDevServer } from 'vite';
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
 import chatHandler from './vercel-chat.ts';
+import playsHandler from './vercel-plays.ts';
 import { knownWallets, sameHandle } from './knownWallets.ts';
 
 function readUrl(req: IncomingMessage): URL {
@@ -110,6 +111,25 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
   }
 }
 
+async function handlePlays(req: IncomingMessage, res: ServerResponse, env: Record<string, string>) {
+  await playsHandler(
+    { method: req.method, url: req.url },
+    {
+      setHeader: (k, v) => {
+        res.setHeader(k, v);
+      },
+      status: (code: number) => ({
+        json: (payload: unknown) => send(res, code, payload),
+        end: () => {
+          res.statusCode = code;
+          res.end();
+        },
+      }),
+    },
+    env,
+  );
+}
+
 function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
   return (req, res, next) => {
     const path = req.url?.split('?')[0];
@@ -131,6 +151,10 @@ function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
     }
     if (path === '/api/portfolio' && (req.method === 'GET' || req.method === 'POST')) {
       void handlePortfolio(req, res, env);
+      return;
+    }
+    if (path === '/api/plays') {
+      void handlePlays(req, res, env);
       return;
     }
     if (path === '/api/chat') {

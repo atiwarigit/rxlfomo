@@ -12,6 +12,9 @@
     },
     "api/chat.js": {
       "maxDuration": 60
+    },
+    "api/plays.js": {
+      "maxDuration": 60
     }
   }
 }

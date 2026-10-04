@@ -9,6 +9,7 @@ await esbuild.build({
   entryPoints: {
     portfolio: 'server/vercel-portfolio.ts',
     chat: 'server/vercel-chat.ts',
+    plays: 'server/vercel-plays.ts',
   },
   bundle: true,
   platform: 'node',
