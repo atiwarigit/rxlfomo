@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Radar, RefreshCw, ShieldAlert } from 'lucide-react';
 import { ChatPanel } from './ChatPanel';
 import type { ChatTurn, ScannerChatSnapshot } from '../lib/ai/bookContext';
-import { cn, formatHold, formatPct, formatUsd } from '../lib/format';
+import { cn, formatPct, formatUsd } from '../lib/format';
 import { applyBookVetoes, bookVetoes } from '../lib/scanner/rules';
 import type { PortfolioSnapshot } from '../types/portfolio';
 import type { Play, PlaysResponse } from '../types/plays';
@@ -46,6 +46,13 @@ async function fetchPlays(handle: string, hints: Props['walletHints']): Promise<
   return body;
 }
 
+function formatAge(hours: number | null): string {
+  if (hours == null || !Number.isFinite(hours)) return '—';
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
+  if (hours < 48) return `${hours.toFixed(0)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 function PlayCard({ play, bookVetoed }: { play: Play; bookVetoed: boolean }) {
   const size = play.decision === 'size';
   const chg = play.change1hPct;
@@ -87,7 +94,7 @@ function PlayCard({ play, bookVetoed }: { play: Play; bookVetoed: boolean }) {
         </dd>
         <dt className="text-white/40">Age</dt>
         <dd className="text-right font-mono text-white/80">
-          {play.ageHours == null ? '—' : formatHold(play.ageHours)}
+          {formatAge(play.ageHours)}
         </dd>
       </dl>
 
@@ -185,8 +192,13 @@ export function ScannerTab({
   }, [portfolio, serverBook]);
 
   const plays = useMemo(
-    () => applyBookVetoes((body?.plays ?? []).filter((p) => p.account.toLowerCase() === key), vetoes),
-    [body, key, vetoes],
+    () =>
+      applyBookVetoes(
+        (body?.plays ?? []).filter((p) => p.account.toLowerCase() === key),
+        vetoes,
+        serverBook?.vetoes,
+      ),
+    [body, key, vetoes, serverBook],
   );
   const sizeN = vetoes.length ? 0 : plays.filter((p) => p.decision === 'size').length;
   const watchN = plays.length - sizeN;

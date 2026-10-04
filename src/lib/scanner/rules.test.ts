@@ -200,6 +200,17 @@ describe('applyBookVetoes', () => {
     const out = applyBookVetoes(plays, ['Drawdown -12.0% is past the -8% cut — size down']);
     expect(out[0]).toMatchObject({ decision: 'watch', sizeCapUsd: 0, lastCall: 'WAIT_BOOK' });
   });
+
+  it('replaces the route copy of the book vetoes instead of listing both', () => {
+    const { book: b, plays } = buildPlays({
+      handle: 'BusyMereDog',
+      book: book({ cash: 0, drawdown: -14 }),
+      tape: [tape({})],
+    });
+    const onScreen = ['Cash 1% is under the 20% floor'];
+    const out = applyBookVetoes(plays, onScreen, b.vetoes);
+    expect(out[0].vetoes).toEqual(onScreen);
+  });
 });
 
 describe('tape rows', () => {

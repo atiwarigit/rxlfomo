@@ -275,10 +275,11 @@ export function buildPlays(input: {
 }
 
 /** Re-apply book vetoes computed from the book on screen (it carries the browser's peak). */
-export function applyBookVetoes(plays: Play[], vetoes: string[]): Play[] {
+export function applyBookVetoes(plays: Play[], vetoes: string[], routeVetoes: string[] = []): Play[] {
   if (!vetoes.length) return plays;
+  const drop = new Set([...vetoes, ...routeVetoes]);
   return plays.map((p) => {
-    const merged = [...vetoes, ...p.vetoes.filter((v) => !vetoes.includes(v))];
+    const merged = [...vetoes, ...p.vetoes.filter((v) => !drop.has(v))];
     return {
       ...p,
       vetoes: merged,

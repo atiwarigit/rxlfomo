@@ -6,3 +6,4 @@
 - Unit tests for metrics, FOMO mapping, sparks, stream, heroes, compact book, LLM config
 - Operator still needs FOMO_API_KEY / handle to show their FOMO book (no mock fallback)
 - LLM will 400 until `LLM_API_KEY` / `AI_GATEWAY_API_KEY` / `OPENAI_API_KEY` or a pasted Sources key is present
+- Scanner tab: `/api/plays` tape vs book (watch/size cards, caps, vetoes), no fomoapi; chat on the tab sees the cards. Pending: align scoring with `rxlfomo-scanner/scan.py` once available.
