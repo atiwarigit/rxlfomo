@@ -1,4 +1,5 @@
 import type { PortfolioSnapshot } from '../../types/portfolio.ts';
+import type { Play, PlayBook } from '../../types/plays.ts';
 import { launchpadRotation, narrativeRotation } from '../ops/rotation.ts';
 
 export interface ChatTurn {
@@ -54,6 +55,42 @@ export function compactBook(snap: PortfolioSnapshot): string {
   lines.push(
     'Desk rules: cash floor 20%, single-name cap ~15% once book is large, size down after 8% drawdown, do not invent fills FOMO did not capture.',
   );
+  return lines.join('\n');
+}
+
+export interface ScannerChatSnapshot {
+  book: PortfolioSnapshot | null;
+  plays: Play[];
+  books?: PlayBook[];
+  tapeCount?: number;
+}
+
+export type ChatSnapshot = PortfolioSnapshot | ScannerChatSnapshot;
+
+export function isScannerSnapshot(snap: unknown): snap is ScannerChatSnapshot {
+  return Boolean(snap && typeof snap === 'object' && 'plays' in snap && Array.isArray((snap as ScannerChatSnapshot).plays));
+}
+
+export function compactPlays(snap: ScannerChatSnapshot): string {
+  const lines: string[] = [];
+  for (const b of snap.books || []) {
+    lines.push(
+      `Book @${b.handle}: equity ${n(b.equity)} cash ${b.cashPct.toFixed(0)}% drawdown ${b.drawdownPct.toFixed(1)}% size-floor liquidity ${n(b.sizeFloorLiq)}`,
+    );
+    lines.push(`Book vetoes: ${b.vetoes.length ? b.vetoes.join(' | ') : 'none'}`);
+  }
+  if (snap.tapeCount != null) lines.push(`Tape rows scanned: ${snap.tapeCount}`);
+  const sized = snap.plays.filter((p) => p.decision === 'size').length;
+  lines.push(`Cards: ${snap.plays.length} (${sized} size, ${snap.plays.length - sized} watch), ranked by score:`);
+  snap.plays.forEach((p, i) => {
+    lines.push(
+      `${i + 1}. ${p.symbol} [${p.decision}] score=${p.score} ${p.chain} pad=${p.launchpad} themes=${p.themes.join('/') || '—'} trigger=${p.trigger} liq=${n(p.liquidityUsd)} vol1h=${n(p.volume1hUsd)} 1h=${p.change1hPct == null ? 'n/a' : p.change1hPct.toFixed(1) + '%'} age=${p.ageHours == null ? 'n/a' : p.ageHours.toFixed(1) + 'h'} cap=${n(p.sizeCapUsd)}`,
+    );
+    lines.push(`   edge: ${p.bookEdge || '—'}`);
+    lines.push(`   vetoes: ${p.vetoes.length ? p.vetoes.join(' | ') : 'none'}`);
+  });
+  if (!snap.plays.length) lines.push('(no card overlaps this book right now)');
+  lines.push('A size cap is a ceiling, not an order. Skips are not listed.');
   return lines.join('\n');
 }
 

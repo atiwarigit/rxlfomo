@@ -1,7 +1,6 @@
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import { MessageSquare, Send } from 'lucide-react';
-import type { ChatTurn } from '../lib/ai/bookContext';
-import type { PortfolioSnapshot } from '../types/portfolio';
+import type { ChatSnapshot, ChatTurn } from '../lib/ai/bookContext';
 import { cn } from '../lib/format';
 
 const PROMPTS = [
@@ -12,7 +11,10 @@ const PROMPTS = [
 ];
 
 interface Props {
-  snapshot: PortfolioSnapshot | null;
+  snapshot: ChatSnapshot | null;
+  prompts?: string[];
+  thread?: ChatTurn[];
+  onThread?: (turns: ChatTurn[]) => void;
   llmApiKey: string;
   llmModel: string;
   llmBaseUrl: string;
@@ -37,13 +39,18 @@ async function readJson<T>(res: Response): Promise<T> {
 
 export function ChatPanel({
   snapshot,
+  prompts = PROMPTS,
+  thread,
+  onThread,
   llmApiKey,
   llmModel,
   llmBaseUrl,
   hasServerKey,
   onAttach,
 }: Props) {
-  const [messages, setMessages] = useState<ChatTurn[]>([]);
+  const [localMessages, setLocalMessages] = useState<ChatTurn[]>([]);
+  const messages = thread ?? localMessages;
+  const setMessages = onThread ?? setLocalMessages;
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +131,7 @@ export function ChatPanel({
               did not capture.
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {PROMPTS.map((p) => (
+              {prompts.map((p) => (
                 <button
                   key={p}
                   type="button"

@@ -8,7 +8,9 @@ import { PositionsTable } from './components/PositionsTable';
 import { RiskPanel } from './components/RiskPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { DecisionStream } from './components/ops/DecisionStream';
-import { HeaderStrip } from './components/ops/HeaderStrip';
+import { HeaderStrip, type DeskTab } from './components/ops/HeaderStrip';
+import { ScannerTab } from './components/ScannerTab';
+import type { ChatTurn } from './lib/ai/bookContext';
 import { HeroPositionCard } from './components/ops/HeroPositionCard';
 import { SizeBoard } from './components/ops/SizeBoard';
 import { TapeBar } from './components/ops/TapeBar';
@@ -71,6 +73,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [hasServerLlmKey, setHasServerLlmKey] = useState(false);
   const [handles, setHandles] = useState<string[]>(() => recentHandles());
+  const [tab, setTab] = useState<DeskTab>('ops');
+  const [thread, setThread] = useState<ChatTurn[]>([]);
 
   useEffect(() => {
     void (async () => {
@@ -160,6 +164,7 @@ function App() {
     setConfig(cfg);
     setHandles(rememberHandle(clean));
     setData(null);
+    setThread([]);
     const url = new URL(window.location.href);
     url.searchParams.set('handle', clean);
     window.history.replaceState(null, '', url);
@@ -191,8 +196,26 @@ function App() {
         onSwitch={switchHandle}
         onRefresh={() => void refresh()}
         onSources={() => setSettingsOpen(true)}
+        tab={tab}
+        onTab={setTab}
       />
 
+      {tab === 'scanner' ? (
+        <main className="mx-auto max-w-[1600px] space-y-4 bg-[#0b0f19] px-4 py-4">
+          <ScannerTab
+            handle={config.handle}
+            portfolio={data}
+            walletHints={walletsFor(config.handle)}
+            llmApiKey={config.llmApiKey}
+            llmModel={config.llmModel}
+            llmBaseUrl={config.llmBaseUrl}
+            hasServerKey={hasServerLlmKey}
+            onAttach={() => setSettingsOpen(true)}
+            thread={thread}
+            onThread={setThread}
+          />
+        </main>
+      ) : (
       <main className="mx-auto max-w-[1600px] space-y-4 px-4 py-4">
         {error && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
@@ -253,6 +276,8 @@ function App() {
                   llmBaseUrl={config.llmBaseUrl}
                   hasServerKey={hasServerLlmKey}
                   onAttach={() => setSettingsOpen(true)}
+                  thread={thread}
+                  onThread={setThread}
                 />
               </div>
             </section>
@@ -307,6 +332,7 @@ function App() {
           </>
         )}
       </main>
+      )}
 
       <SettingsPanel
         key={`${config.handle}-${settingsOpen}`}

@@ -15,6 +15,35 @@ interface Props {
   onSwitch: (handle: string) => void;
   onRefresh: () => void;
   onSources: () => void;
+  tab: DeskTab;
+  onTab: (tab: DeskTab) => void;
+}
+
+export type DeskTab = 'ops' | 'scanner';
+
+function TabSwitch({ tab, onTab }: { tab: DeskTab; onTab: (tab: DeskTab) => void }) {
+  return (
+    <div role="tablist" aria-label="Desk view" className="mt-1 flex items-center gap-0.5 text-[11px]">
+      {(['ops', 'scanner'] as const).map((t, i) => (
+        <span key={t} className="flex items-center gap-0.5">
+          {i ? <span className="text-white/20">|</span> : null}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => onTab(t)}
+            className={
+              tab === t
+                ? 'px-1 font-semibold text-amber-300'
+                : 'px-1 text-white/45 hover:text-white'
+            }
+          >
+            {t === 'ops' ? 'Ops' : 'Scanner'}
+          </button>
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function HandleSwitcher({
@@ -94,6 +123,8 @@ export function HeaderStrip({
   onSwitch,
   onRefresh,
   onSources,
+  tab,
+  onTab,
 }: Props) {
   const s = data?.summary;
   const pnl24 = data?.pnlWindows.h24;
@@ -127,7 +158,10 @@ export function HeaderStrip({
               ) : null}
             </p>
           ) : null}
-          <HandleSwitcher handle={handle} handles={handles} onSwitch={onSwitch} />
+          <div className="flex flex-wrap items-center gap-2">
+            <HandleSwitcher handle={handle} handles={handles} onSwitch={onSwitch} />
+            <TabSwitch tab={tab} onTab={onTab} />
+          </div>
         </div>
 
         <Cell

@@ -1,6 +1,5 @@
 import { ChatConfigError, resolveLlmConfig, runPortfolioChat } from '../src/lib/ai/runChat.ts';
-import type { ChatTurn } from '../src/lib/ai/bookContext.ts';
-import type { PortfolioSnapshot } from '../src/types/portfolio.ts';
+import type { ChatSnapshot, ChatTurn } from '../src/lib/ai/bookContext.ts';
 
 export const config = {
   maxDuration: 60,
@@ -23,7 +22,7 @@ function headerValue(headers: Query | { get?: (name: string) => string | null },
 
 type ChatBody = {
   messages?: ChatTurn[];
-  snapshot?: PortfolioSnapshot | null;
+  snapshot?: ChatSnapshot | null;
   model?: string;
   baseUrl?: string;
 };

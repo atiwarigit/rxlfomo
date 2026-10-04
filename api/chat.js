@@ -122,6 +122,31 @@ function compactBook(snap) {
   );
   return lines.join("\n");
 }
+function isScannerSnapshot(snap) {
+  return Boolean(snap && typeof snap === "object" && "plays" in snap && Array.isArray(snap.plays));
+}
+function compactPlays(snap) {
+  const lines = [];
+  for (const b of snap.books || []) {
+    lines.push(
+      `Book @${b.handle}: equity ${n(b.equity)} cash ${b.cashPct.toFixed(0)}% drawdown ${b.drawdownPct.toFixed(1)}% size-floor liquidity ${n(b.sizeFloorLiq)}`
+    );
+    lines.push(`Book vetoes: ${b.vetoes.length ? b.vetoes.join(" | ") : "none"}`);
+  }
+  if (snap.tapeCount != null) lines.push(`Tape rows scanned: ${snap.tapeCount}`);
+  const sized = snap.plays.filter((p) => p.decision === "size").length;
+  lines.push(`Cards: ${snap.plays.length} (${sized} size, ${snap.plays.length - sized} watch), ranked by score:`);
+  snap.plays.forEach((p, i) => {
+    lines.push(
+      `${i + 1}. ${p.symbol} [${p.decision}] score=${p.score} ${p.chain} pad=${p.launchpad} themes=${p.themes.join("/") || "\u2014"} trigger=${p.trigger} liq=${n(p.liquidityUsd)} vol1h=${n(p.volume1hUsd)} 1h=${p.change1hPct == null ? "n/a" : p.change1hPct.toFixed(1) + "%"} age=${p.ageHours == null ? "n/a" : p.ageHours.toFixed(1) + "h"} cap=${n(p.sizeCapUsd)}`
+    );
+    lines.push(`   edge: ${p.bookEdge || "\u2014"}`);
+    lines.push(`   vetoes: ${p.vetoes.length ? p.vetoes.join(" | ") : "none"}`);
+  });
+  if (!snap.plays.length) lines.push("(no card overlaps this book right now)");
+  lines.push("A size cap is a ceiling, not an order. Skips are not listed.");
+  return lines.join("\n");
+}
 function n(v) {
   return v.toFixed(2);
 }
@@ -136,7 +161,8 @@ Answer like a trading desk: short, specific, numbered when useful.
 Never invent closed-trade PnL, entries, or fills that are not in the snapshot. If cost basis is missing, say the number is 24h mark-to-market, not all-time PnL.
 Cash = SOL + stables. Flag names >15% of equity and cash <20%.
 Each name carries its launchpad (Pons, Bankr, Pump.fun, Stonk.fun\u2026) and narrative tags; "Stonks" means paired against a tokenized stock. For rotation questions, compare launchpads/narratives by size-weighted 24h move and realized vs unrealized, and say which bucket is heating up or bleeding.
-If the operator asks what to do, give a risk action (trim / hold / wait for cash) rather than a new meme call unless they ask for one.`;
+If the operator asks what to do, give a risk action (trim / hold / wait for cash) rather than a new meme call unless they ask for one.
+When a SCANNER block is present, it lists tape cards scored against this book: decision is watch or size, the size cap is a ceiling not an order, and vetoes say exactly what blocked size. Name cards by symbol and quote the blocking veto. Never give buy/sell/sign instructions or invent cards that are not listed.`;
 var ChatConfigError = class extends Error {
   constructor(message) {
     super(message);
@@ -160,13 +186,19 @@ async function runPortfolioChat(input) {
     apiKey: input.apiKey.trim(),
     ...input.baseUrl ? { baseURL: input.baseUrl.replace(/\/$/, "") } : {}
   });
-  const book = input.snapshot ? compactBook(input.snapshot) : "No live book is loaded.";
+  const snap = input.snapshot;
+  const portfolio = isScannerSnapshot(snap) ? snap.book : snap;
+  const book = portfolio ? compactBook(portfolio) : "No live book is loaded.";
+  const scanner = isScannerSnapshot(snap) ? `
+
+SCANNER
+${compactPlays(snap)}` : "";
   const history = input.messages.filter((m) => (m.role === "user" || m.role === "assistant") && m.content.trim()).slice(-12).map((m) => `${m.role === "user" ? "Operator" : "Desk"}: ${m.content.trim()}`).join("\n");
   const { text } = await generateText({
     model: openai(modelId.replace(/^openai\//, "")),
     system: SYSTEM,
     prompt: `LIVE BOOK
-${book}
+${book}${scanner}
 
 THREAD
 ${history || "(none yet)"}
