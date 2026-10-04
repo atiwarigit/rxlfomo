@@ -1882,6 +1882,9 @@ function ageText(h) {
   if (h < 48) return `${h.toFixed(0)}h`;
   return `${Math.round(h / 24)}d`;
 }
+function themeWord(theme) {
+  return /^[A-Z][a-z]/.test(theme) ? theme[0].toLowerCase() + theme.slice(1) : theme;
+}
 function dedupe(plays) {
   const seenMint = /* @__PURE__ */ new Set();
   const seenSymbol = /* @__PURE__ */ new Set();
@@ -1919,7 +1922,7 @@ function buildPlays(input) {
     const fitTheme = themes.find((t) => paid(profile.themes.get(t)));
     const fitsPad = paid(padRow);
     const bookFit = fitsPad || fitTheme ? "fits" : "new";
-    const bookEdge = fitsPad ? `Fits ${launchpad}` : fitTheme ? `Fits ${fitTheme.toLowerCase()}` : "New to this book";
+    const bookEdge = fitsPad ? `Fits ${launchpad}` : fitTheme ? `Fits ${themeWord(fitTheme)}` : "New to this book";
     const cardVetoes = [];
     if (row.liquidityUsd < floors.sizeFloorLiq) {
       cardVetoes.push(`liquidity ${usd(row.liquidityUsd)} under the ${usd(floors.sizeFloorLiq)} size floor`);

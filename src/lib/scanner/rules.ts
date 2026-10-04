@@ -219,6 +219,10 @@ function ageText(h: number): string {
   return `${Math.round(h / 24)}d`;
 }
 
+function themeWord(theme: string): string {
+  return /^[A-Z][a-z]/.test(theme) ? theme[0].toLowerCase() + theme.slice(1) : theme;
+}
+
 function dedupe(plays: Play[]): Play[] {
   const seenMint = new Set<string>();
   const seenSymbol = new Set<string>();
@@ -265,7 +269,7 @@ export function buildPlays(input: {
     const fitTheme = themes.find((t) => paid(profile.themes.get(t)));
     const fitsPad = paid(padRow);
     const bookFit = fitsPad || fitTheme ? 'fits' : 'new';
-    const bookEdge = fitsPad ? `Fits ${launchpad}` : fitTheme ? `Fits ${fitTheme.toLowerCase()}` : 'New to this book';
+    const bookEdge = fitsPad ? `Fits ${launchpad}` : fitTheme ? `Fits ${themeWord(fitTheme)}` : 'New to this book';
 
     const cardVetoes: string[] = [];
     if (row.liquidityUsd < floors.sizeFloorLiq) {
