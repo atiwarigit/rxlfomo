@@ -73,25 +73,38 @@ export function isScannerSnapshot(snap: unknown): snap is ScannerChatSnapshot {
 
 export function compactPlays(snap: ScannerChatSnapshot): string {
   const lines: string[] = [];
+  const bookVetoes = new Set<string>();
   for (const b of snap.books || []) {
     lines.push(
       `Book @${b.handle}: equity ${n(b.equity)} cash ${b.cashPct.toFixed(0)}% drawdown ${b.drawdownPct.toFixed(1)}% size-floor liquidity ${n(b.sizeFloorLiq)}`,
     );
-    lines.push(`Book vetoes: ${b.vetoes.length ? b.vetoes.join(' | ') : 'none'}`);
+    lines.push(
+      b.vetoes.length
+        ? `Book veto (blocks every size): Size $0 — ${b.vetoes.join(', ')}. These are watches, not entries.`
+        : 'Book veto: none',
+    );
+    b.vetoes.forEach((v) => bookVetoes.add(v));
   }
   if (snap.tapeCount != null) lines.push(`Tape rows scanned: ${snap.tapeCount}`);
   const sized = snap.plays.filter((p) => p.decision === 'size').length;
-  lines.push(`Cards: ${snap.plays.length} (${sized} size, ${snap.plays.length - sized} watch), ranked by score:`);
+  lines.push(
+    `Runner cards: ${snap.plays.length} (${sized} size, ${snap.plays.length - sized} watch), ranked by runner score (freshness, 1h move, buy share, exit liquidity, wash; the book does not score):`,
+  );
   snap.plays.forEach((p, i) => {
+    const txns = (p.buys1h ?? 0) + (p.sells1h ?? 0);
     lines.push(
-      `${i + 1}. ${p.symbol} [${p.decision}] score=${p.score} ${p.chain} pad=${p.launchpad} themes=${p.themes.join('/') || '—'} trigger=${p.trigger} liq=${n(p.liquidityUsd)} vol1h=${n(p.volume1hUsd)} 1h=${p.change1hPct == null ? 'n/a' : p.change1hPct.toFixed(1) + '%'} age=${p.ageHours == null ? 'n/a' : p.ageHours.toFixed(1) + 'h'} cap=${n(p.sizeCapUsd)}`,
+      `${i + 1}. ${p.symbol} ${String(p.runnerLabel).toUpperCase()} ${p.runnerScore} [${p.decision}] ${p.chain} pad=${p.launchpad} themes=${p.themes.join('/') || '—'} mcap=${p.marketCapUsd == null ? 'missing' : n(p.marketCapUsd)}${p.fdvUsd != null ? ` fdv=${n(p.fdvUsd)}` : ''} age=${p.ageHours == null ? 'n/a' : p.ageHours.toFixed(1) + 'h'} 5m=${pc(p.change5mPct)} 1h=${pc(p.change1hPct)} 6h=${pc(p.change6hPct)} buys=${txns ? `${p.buys1h}/${txns}` : 'n/a'} liq=${n(p.liquidityUsd)} vol1h=${n(p.volume1hUsd)} cap=${n(p.sizeCapUsd)}`,
     );
-    lines.push(`   edge: ${p.bookEdge || '—'}`);
-    lines.push(`   vetoes: ${p.vetoes.length ? p.vetoes.join(' | ') : 'none'}`);
+    const own = p.vetoes.filter((v) => !bookVetoes.has(v));
+    lines.push(`   book: ${p.bookEdge || '—'}${own.length ? ` | card vetoes: ${own.join(' | ')}` : ''}`);
   });
-  if (!snap.plays.length) lines.push('(no card overlaps this book right now)');
+  if (!snap.plays.length) lines.push('(no runner under 48h scores 30+ right now)');
   lines.push('A size cap is a ceiling, not an order. Skips are not listed.');
   return lines.join('\n');
+}
+
+function pc(v: number | null | undefined): string {
+  return v == null ? 'n/a' : `${v.toFixed(1)}%`;
 }
 
 function n(v: number): string {

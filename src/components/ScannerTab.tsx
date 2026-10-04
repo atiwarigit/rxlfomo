@@ -3,7 +3,7 @@ import { ExternalLink, Radar, RefreshCw, ShieldAlert } from 'lucide-react';
 import { ChatPanel } from './ChatPanel';
 import type { ChatTurn, ScannerChatSnapshot } from '../lib/ai/bookContext';
 import { cn, formatPct, formatUsd } from '../lib/format';
-import { applyBookVetoes, bookVetoes } from '../lib/scanner/rules';
+import { applyBookVetoes, bookNumbers, bookVetoes, vetoSentence } from '../lib/scanner/rules';
 import type { PortfolioSnapshot } from '../types/portfolio';
 import type { Play, PlaysResponse } from '../types/plays';
 
@@ -47,78 +47,100 @@ async function fetchPlays(handle: string, hints: Props['walletHints']): Promise<
 }
 
 function formatAge(hours: number | null): string {
-  if (hours == null || !Number.isFinite(hours)) return '—';
-  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
-  if (hours < 48) return `${hours.toFixed(0)}h`;
-  return `${Math.round(hours / 24)}d`;
+  if (hours == null || !Number.isFinite(hours)) return 'launch time missing';
+  if (hours < 1) return `launched ${Math.max(1, Math.round(hours * 60))}m ago`;
+  if (hours < 48) return `launched ${hours.toFixed(0)}h ago`;
+  return `launched ${Math.round(hours / 24)}d ago`;
 }
 
-function PlayCard({ play, bookVetoed }: { play: Play; bookVetoed: boolean }) {
-  const size = play.decision === 'size';
-  const chg = play.change1hPct;
+function capLine(play: Play): string {
+  if (play.marketCapUsd == null) return 'mcap missing';
+  const mcap = `${formatUsd(play.marketCapUsd, true)} mcap`;
+  return play.fdvUsd != null && play.fdvUsd > play.marketCapUsd * 2
+    ? `${mcap} · ${formatUsd(play.fdvUsd, true)} FDV`
+    : mcap;
+}
+
+function oneHourTone(v: number | null): string {
+  if (v == null) return 'text-white/50';
+  if (v < 0) return 'text-rose-400';
+  if (v > 80) return 'text-amber-300';
+  if (v >= 8 && v <= 45) return 'text-emerald-400';
+  return 'text-white/80';
+}
+
+const LABEL_TONE: Record<Play['runnerLabel'], string> = {
+  early: 'bg-emerald-400/15 text-emerald-300',
+  building: 'bg-sky-400/15 text-sky-300',
+  chase: 'bg-amber-400/15 text-amber-300',
+};
+
+function Figure({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/30 px-2 py-1">
+      <p className="text-[9px] uppercase tracking-[0.16em] text-white/40">{label}</p>
+      <p className={cn('font-mono text-sm', tone)}>{value}</p>
+    </div>
+  );
+}
+
+function PlayCard({ play }: { play: Play }) {
+  const txns = (play.buys1h ?? 0) + (play.sells1h ?? 0);
+  const share = txns ? Math.round(((play.buys1h ?? 0) / txns) * 100) : null;
+  const meta = [
+    capLine(play),
+    formatAge(play.ageHours),
+    play.launchpad !== 'Unknown' ? play.launchpad : null,
+    play.themes[0]?.split(' / ')[0] ?? null,
+  ].filter(Boolean);
+  const m5 = play.change5mPct;
   return (
     <article className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-[#0d0f18] p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="truncate font-mono text-base font-semibold">{play.symbol}</h3>
-          <p className="truncate text-[11px] text-white/45">
-            {play.launchpad} · {play.chain}
-            {play.themes.length ? ` · ${play.themes.join(' / ')}` : ''}
-          </p>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="truncate font-mono text-base font-semibold">{play.symbol}</h3>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {play.decision === 'size' ? (
+            <span className="font-mono text-[10px] text-emerald-300">size ≤ {formatUsd(play.sizeCapUsd, true)}</span>
+          ) : null}
+          <span
+            className={cn(
+              'rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider',
+              LABEL_TONE[play.runnerLabel],
+            )}
+          >
+            {play.runnerLabel} {play.runnerScore}
+          </span>
         </div>
-        <span
-          className={cn(
-            'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
-            size ? 'bg-emerald-400/15 text-emerald-300' : 'bg-amber-400/15 text-amber-300',
-          )}
-        >
-          {play.decision}
-        </span>
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-        <dt className="text-white/40">Trigger</dt>
-        <dd className="truncate text-right text-white/80" title={play.trigger}>
-          {play.trigger}
-        </dd>
-        <dt className="text-white/40">Liquidity</dt>
-        <dd className="text-right font-mono text-white/80">{formatUsd(play.liquidityUsd, true)}</dd>
-        <dt className="text-white/40">1h</dt>
-        <dd
-          className={cn(
-            'text-right font-mono',
-            chg == null ? 'text-white/50' : chg >= 0 ? 'text-emerald-400' : 'text-rose-400',
-          )}
-        >
-          {chg == null ? '—' : formatPct(chg)}
-        </dd>
-        <dt className="text-white/40">Age</dt>
-        <dd className="text-right font-mono text-white/80">
-          {formatAge(play.ageHours)}
-        </dd>
-      </dl>
+      <p className="text-[11px] text-white/55">{meta.join(' · ')}</p>
 
-      <p className="text-[12px] leading-snug text-white/75">{play.reason}</p>
-      {play.bookEdge ? (
-        <p className="text-[11px] leading-snug text-sky-200/70">Book edge · {play.bookEdge}</p>
-      ) : null}
-
-      <div className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
-        <p className="text-[10px] uppercase tracking-[0.16em] text-white/40">Size cap</p>
-        <p className={cn('font-mono text-sm', play.sizeCapUsd > 0 ? 'text-emerald-300' : 'text-white/60')}>
-          {play.sizeCapUsd > 0
-            ? `≤ ${formatUsd(play.sizeCapUsd)}`
-            : `$0 — ${bookVetoed ? 'book veto' : 'card veto'}`}
-        </p>
+      <div className="grid grid-cols-3 gap-1.5">
+        <Figure
+          label="5m"
+          value={m5 == null ? '—' : formatPct(m5)}
+          tone={m5 == null ? 'text-white/50' : m5 < 0 ? 'text-rose-400' : 'text-white/80'}
+        />
+        <Figure
+          label="1h"
+          value={play.change1hPct == null ? '—' : formatPct(play.change1hPct)}
+          tone={oneHourTone(play.change1hPct)}
+        />
+        <Figure
+          label="buys"
+          value={share == null ? '—' : `${share}%`}
+          tone={share == null ? 'text-white/50' : share >= 58 ? 'text-emerald-400' : share < 45 ? 'text-rose-400' : 'text-white/80'}
+        />
       </div>
 
-      {play.vetoes.length ? (
-        <ul className="space-y-0.5 text-[11px] text-amber-200/80">
-          {play.vetoes.map((v) => (
-            <li key={v}>· {v}</li>
-          ))}
-        </ul>
-      ) : null}
+      <p className="font-mono text-[11px] text-white/70">
+        Liq {formatUsd(play.liquidityUsd, true)} · 1h vol {formatUsd(play.volume1hUsd, true)}
+        {txns ? <span className="text-white/35"> · {txns} txns</span> : null}
+      </p>
+
+      <p className={cn('text-[11px]', play.bookFit === 'fits' ? 'text-sky-200/80' : 'text-white/40')}>
+        {play.bookEdge}
+      </p>
 
       <a
         href={play.pairUrl}
@@ -174,14 +196,7 @@ export function ScannerTab({
   const serverBook = body?.books.find((b) => b.handle.toLowerCase() === key);
 
   const vetoes = useMemo(() => {
-    const s = portfolio?.summary;
-    const onScreen = s
-      ? bookVetoes({
-          equity: s.totalEquity,
-          cashPct: s.totalEquity > 0 ? (s.cashUsd / s.totalEquity) * 100 : 0,
-          drawdownPct: s.currentDrawdownPct,
-        })
-      : [];
+    const onScreen = portfolio ? bookVetoes(bookNumbers(portfolio)) : [];
     const fromRoute = serverBook?.vetoes ?? [];
     const merged = [...onScreen];
     for (const v of fromRoute) {
@@ -194,7 +209,10 @@ export function ScannerTab({
   const plays = useMemo(
     () =>
       applyBookVetoes(
-        (body?.plays ?? []).filter((p) => p.account.toLowerCase() === key),
+        (body?.plays ?? []).filter(
+          (p, i, all) =>
+            p.account.toLowerCase() === key && all.findIndex((q) => q.mint === p.mint) === i,
+        ),
         vetoes,
         serverBook?.vetoes,
       ),
@@ -244,16 +262,14 @@ export function ScannerTab({
           </button>
         </div>
         {vetoes.length ? (
-          <ul className="mt-2 space-y-0.5 border-t border-white/10 pt-2">
-            {vetoes.map((v) => (
-              <li key={v} className="flex items-center gap-1.5 text-xs text-rose-200/90">
-                <ShieldAlert size={12} className="shrink-0 text-rose-300" />
-                {v}
-              </li>
-            ))}
-          </ul>
+          <p className="mt-2 flex items-start gap-1.5 border-t border-white/10 pt-2 text-xs text-rose-200/90">
+            <ShieldAlert size={12} className="mt-0.5 shrink-0 text-rose-300" />
+            {vetoSentence(vetoes)}
+          </p>
         ) : body ? (
-          <p className="mt-2 border-t border-white/10 pt-2 text-xs text-white/40">No book veto.</p>
+          <p className="mt-2 border-t border-white/10 pt-2 text-xs text-white/40">
+            No book veto — a size card carries a cap, not an order.
+          </p>
         ) : null}
       </section>
 
@@ -267,12 +283,12 @@ export function ScannerTab({
         <p className="py-10 text-center text-sm text-white/40">Reading the tape against @{handle}'s book…</p>
       ) : body && !plays.length ? (
         <p className="rounded-2xl border border-white/10 bg-[#0b0f19] py-10 text-center text-sm text-white/45">
-          Nothing on the tape overlaps a launchpad or theme this book has traded, above the liquidity floor.
+          No pool under 48h scores 30+ as a runner above this book's liquidity floor right now.
         </p>
       ) : (
         <section className="grid items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {plays.slice(0, MAX_CARDS).map((p) => (
-            <PlayCard key={`${p.chain}:${p.mint}`} play={p} bookVetoed={vetoes.length > 0} />
+            <PlayCard key={`${p.chain}:${p.mint}`} play={p} />
           ))}
         </section>
       )}

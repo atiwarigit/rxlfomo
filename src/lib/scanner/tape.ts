@@ -43,6 +43,11 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function positiveOrNull(v: unknown): number | null {
+  const n = numOrNull(v);
+  return n != null && n > 0 ? n : null;
+}
+
 interface DexListed {
   chainId?: string;
   tokenAddress?: string;
@@ -56,7 +61,10 @@ interface DexPair {
   quoteToken?: { symbol?: string };
   liquidity?: { usd?: number } | null;
   volume?: { h1?: number };
-  priceChange?: { h1?: number };
+  priceChange?: { m5?: number; h1?: number; h6?: number };
+  txns?: { h1?: { buys?: number; sells?: number } };
+  marketCap?: number | null;
+  fdv?: number | null;
   pairCreatedAt?: number;
 }
 
@@ -65,8 +73,11 @@ interface GeckoPool {
     address?: string;
     name?: string;
     reserve_in_usd?: string;
+    market_cap_usd?: string | null;
+    fdv_usd?: string | null;
     pool_created_at?: string;
-    price_change_percentage?: { h1?: string };
+    price_change_percentage?: { m5?: string; h1?: string; h6?: string };
+    transactions?: { h1?: { buys?: number; sells?: number } };
     volume_usd?: { h1?: string };
   };
   relationships?: {
@@ -88,7 +99,14 @@ export function rowFromDexPair(pair: DexPair, sources: TapeSource[], now = Date.
     quoteSymbol: pair.quoteToken?.symbol || '',
     liquidityUsd: num(pair.liquidity?.usd),
     volume1hUsd: num(pair.volume?.h1),
+    marketCapUsd: positiveOrNull(pair.marketCap),
+    fdvUsd: positiveOrNull(pair.fdv),
+    launchedAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt).toISOString() : null,
+    change5mPct: numOrNull(pair.priceChange?.m5),
     change1hPct: numOrNull(pair.priceChange?.h1),
+    change6hPct: numOrNull(pair.priceChange?.h6),
+    buys1h: numOrNull(pair.txns?.h1?.buys),
+    sells1h: numOrNull(pair.txns?.h1?.sells),
     ageHours: pair.pairCreatedAt ? Math.max(0, (now - pair.pairCreatedAt) / 3_600_000) : null,
     pairUrl: pair.url || `https://dexscreener.com/${chain}/${mint}`,
     sources: [...sources],
@@ -110,7 +128,14 @@ export function rowFromGeckoPool(pool: GeckoPool, source: TapeSource, now = Date
     quoteSymbol: quote.trim(),
     liquidityUsd: num(a.reserve_in_usd),
     volume1hUsd: num(a.volume_usd?.h1),
+    marketCapUsd: positiveOrNull(a.market_cap_usd),
+    fdvUsd: positiveOrNull(a.fdv_usd),
+    launchedAt: Number.isFinite(created) ? new Date(created).toISOString() : null,
+    change5mPct: numOrNull(a.price_change_percentage?.m5),
     change1hPct: numOrNull(a.price_change_percentage?.h1),
+    change6hPct: numOrNull(a.price_change_percentage?.h6),
+    buys1h: numOrNull(a.transactions?.h1?.buys),
+    sells1h: numOrNull(a.transactions?.h1?.sells),
     ageHours: Number.isFinite(created) ? Math.max(0, (now - created) / 3_600_000) : null,
     pairUrl: `https://www.geckoterminal.com/solana/pools/${a.address || ''}`,
     sources: [source],
@@ -168,6 +193,28 @@ async function loadTape(fetchFn: typeof fetch): Promise<TapeResult> {
   add(boosts, 'dex-boost');
   add(profiles, 'dex-profile');
 
+  const geckoRows = new Map<string, TapeRow>();
+  const gecko: [GeckoPool[], TapeSource][] = [
+    [fresh.data || [], 'gecko-new'],
+    [trending.data || [], 'gecko-trending'],
+  ];
+  for (const [pools, source] of gecko) {
+    for (const pool of pools) {
+      const row = rowFromGeckoPool(pool, source);
+      if (!row) continue;
+      const k = key(row.chain, row.mint);
+      const prev = geckoRows.get(k);
+      if (prev) {
+        if (!prev.sources.includes(source)) prev.sources.push(source);
+      } else {
+        geckoRows.set(k, row);
+      }
+      const listedRow = listed.get(k) || { chain: row.chain, mint: row.mint, sources: [] };
+      if (!listedRow.sources.includes(source)) listedRow.sources.push(source);
+      listed.set(k, listedRow);
+    }
+  }
+
   const byChain = new Map<string, string[]>();
   for (const row of listed.values()) {
     const list = byChain.get(row.chain) || [];
@@ -192,25 +239,9 @@ async function loadTape(fetchFn: typeof fetch): Promise<TapeResult> {
   const rows = new Map<string, TapeRow>();
   for (const [k, it] of listed) {
     const pair = pairs.get(k);
-    const row = pair ? rowFromDexPair(pair, it.sources) : null;
+    const fallback = geckoRows.get(k);
+    const row = pair ? rowFromDexPair(pair, it.sources) : fallback ? { ...fallback, sources: it.sources } : null;
     if (row) rows.set(k, row);
-  }
-  const gecko: [GeckoPool[], TapeSource][] = [
-    [fresh.data || [], 'gecko-new'],
-    [trending.data || [], 'gecko-trending'],
-  ];
-  for (const [pools, source] of gecko) {
-    for (const pool of pools) {
-      const row = rowFromGeckoPool(pool, source);
-      if (!row) continue;
-      const k = key(row.chain, row.mint);
-      const prev = rows.get(k);
-      if (prev) {
-        if (!prev.sources.includes(source)) prev.sources.push(source);
-      } else {
-        rows.set(k, row);
-      }
-    }
   }
 
   return {

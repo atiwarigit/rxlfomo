@@ -3,7 +3,15 @@ import type { PortfolioSnapshot, Position } from '../../types/portfolio.ts';
 import type { TapeRow } from '../../types/plays.ts';
 import { compactPlays } from '../ai/bookContext.ts';
 import { chatPrompt } from '../ai/runChat.ts';
-import { applyBookVetoes, bookVetoes, buildPlays, scannerLaunchpad } from './rules.ts';
+import {
+  applyBookVetoes,
+  bookVetoes,
+  buildPlays,
+  runnerLabel,
+  runnerScore,
+  scannerLaunchpad,
+  vetoSentence,
+} from './rules.ts';
 import { rowFromDexPair, rowFromGeckoPool } from './tape.ts';
 
 function pos(over: Partial<Position>): Position {
@@ -51,8 +59,8 @@ function book(over: { equity?: number; cash?: number; drawdown?: number } = {}):
     influence: { followers: 0, following: null },
     pnlWindows: { h24: null, d7: null, d30: null, all: null },
     openPositions: [
-      pos({ symbol: 'HELD', mint: 'HeldMint1pump', launchpad: 'Pump.fun', narratives: ['Animals'] }),
-      pos({ symbol: 'STK', mint: 'Stk1', launchpad: 'Stonk.fun', narratives: ['Stonks'] }),
+      pos({ symbol: 'HELD', mint: 'HeldMint1pump', launchpad: 'Pump.fun', narratives: ['Animals'], unrealizedPnl: 900 }),
+      pos({ symbol: 'STK', mint: 'Stk1', launchpad: 'Stonk.fun', narratives: ['Stonks'], unrealizedPnl: 400 }),
     ],
     closedTrades: [
       {
@@ -69,7 +77,6 @@ function book(over: { equity?: number; cash?: number; drawdown?: number } = {}):
         holdTimeHours: 5,
         entryDate: '2026-09-30T00:00:00Z',
         exitDate: '2026-10-01T00:00:00Z',
-        launchpad: 'Pump.fun',
         narratives: ['Animals'],
       },
     ],
@@ -88,13 +95,22 @@ function tape(over: Partial<TapeRow>): TapeRow {
     quoteSymbol: 'SOL',
     liquidityUsd: 20_000,
     volume1hUsd: 9_000,
-    change1hPct: 12,
-    ageHours: 3,
+    marketCapUsd: 30_000,
+    fdvUsd: 30_000,
+    launchedAt: '2026-10-04T00:00:00Z',
+    change5mPct: 3,
+    change1hPct: 22,
+    change6hPct: 40,
+    buys1h: 70,
+    sells1h: 30,
+    ageHours: 0.5,
     pairUrl: 'https://dexscreener.com/solana/x',
     sources: ['dex-boost'],
     ...over,
   };
 }
+
+const SMALL = { minLiq: 3_000, sizeFloorLiq: 8_000 };
 
 describe('scannerLaunchpad', () => {
   it('maps the spec launchpads and leaves the rest unknown', () => {
@@ -108,113 +124,150 @@ describe('scannerLaunchpad', () => {
   });
 });
 
-describe('bookVetoes', () => {
-  it('fires on cash under 20% and drawdown past -8%', () => {
-    expect(bookVetoes({ equity: 100, cashPct: 30, drawdownPct: -2 })).toEqual([]);
-    const v = bookVetoes({ equity: 100, cashPct: 0, drawdownPct: -12 });
-    expect(v).toHaveLength(2);
-    expect(v[0]).toContain('20% floor');
-    expect(v[1]).toContain('-8% cut');
+describe('book vetoes', () => {
+  it('reads as one header sentence', () => {
+    expect(bookVetoes({ equity: 100, cashPct: 30, drawdownPct: -2, top3Pct: 40 })).toEqual([]);
+    const v = bookVetoes({ equity: 100, cashPct: 1, drawdownPct: -47, top3Pct: 30 });
+    expect(vetoSentence(v)).toBe(
+      'Size $0 — cash 1% under the 20% floor, drawdown −47% past the −8% cut. These are watches, not entries.',
+    );
+    expect(bookVetoes({ equity: 100, cashPct: 30, drawdownPct: 0, top3Pct: 63 })).toEqual([
+      'top 3 names 63% over the 45% cap',
+    ]);
+  });
+});
+
+describe('runnerScore', () => {
+  it('scores freshness, early move, buyers, exit liquidity and wash per the spec', () => {
+    const base = { liquidityUsd: 20_000, volume1hUsd: 9_000, floors: SMALL };
+    expect(runnerScore({ ...base, ageHours: 0.5, change1hPct: 22, buys1h: 70, sells1h: 30 })).toBe(100);
+    expect(runnerScore({ ...base, ageHours: 30, change1hPct: 98, buys1h: 30, sells1h: 70 })).toBe(4 + 4 + 0 + 20 + 10);
+    expect(runnerScore({ ...base, ageHours: 4, change1hPct: -5, buys1h: 50, sells1h: 50, volume1hUsd: 500_000 })).toBe(
+      22 + 0 + 10 + 20 + 0,
+    );
+    expect(runnerLabel(82)).toBe('early');
+    expect(runnerLabel(61)).toBe('building');
+    expect(runnerLabel(34)).toBe('chase');
+    expect(runnerLabel(29)).toBeNull();
   });
 });
 
 describe('buildPlays', () => {
-  it('sizes a paid-launchpad play with liquidity over the floor, capped by name and cash rules', () => {
-    const { book: b, plays } = buildPlays({ handle: 'BusyMereDog', book: book(), tape: [tape({})] });
-    expect(b.vetoes).toEqual([]);
-    expect(b.sizeFloorLiq).toBe(8_000);
-    expect(plays).toHaveLength(1);
-    expect(plays[0].decision).toBe('size');
-    expect(plays[0].sizeCapUsd).toBe(1_500);
-    expect(plays[0].bookEdge).toContain('Pump.fun');
+  it('drops names older than 48h, so a 53-day +98% trend is gone', () => {
+    const { plays } = buildPlays({
+      handle: 'BusyMereDog',
+      book: book(),
+      tape: [tape({ mint: 'Old1pump', symbol: 'OLD', ageHours: 53 * 24, change1hPct: 98 })],
+    });
+    expect(plays).toEqual([]);
   });
 
-  it('skips held mints, dropped majors, no overlap, unknown pads, and thin liquidity', () => {
+  it('sorts a newer pool above an older Pump.fun name regardless of book fit', () => {
     const { plays } = buildPlays({
+      handle: 'BusyMereDog',
+      book: book(),
+      tape: [
+        tape({ mint: 'Older1pump', symbol: 'OLDCAT', name: 'Old Cat', ageHours: 30, change1hPct: 12 }),
+        tape({ mint: 'Fresh1', symbol: 'FRESH', name: 'Fresh', dexId: 'uniswap', ageHours: 0.4 }),
+      ],
+    });
+    expect(plays.map((p) => p.symbol)).toEqual(['FRESH', 'OLDCAT']);
+    expect(plays[0].runnerLabel).toBe('early');
+    expect(plays[0].bookEdge).toBe('New to this book');
+    expect(plays[1].bookEdge).toBe('Fits animals');
+  });
+
+  it('dedupes by mint and by symbol, keeping the higher runner score', () => {
+    const { plays } = buildPlays({
+      handle: 'BusyMereDog',
+      book: book(),
+      tape: [
+        tape({ mint: 'Hig1pump', symbol: 'HIGGS', ageHours: 20 }),
+        tape({ mint: 'Hig1pump', symbol: 'HIGGS', ageHours: 20 }),
+        tape({ mint: 'Hig2pump', symbol: 'HIGGS', ageHours: 1 }),
+      ],
+    });
+    expect(plays).toHaveLength(1);
+    expect(plays[0].mint).toBe('Hig2pump');
+  });
+
+  it('counts only realized wins or drips as book fit, never open P&L', () => {
+    const { plays } = buildPlays({
+      handle: 'BusyMereDog',
+      book: book(),
+      tape: [tape({ mint: 'S1', dexId: 'stonkfun', symbol: 'TSLAX', name: 'tsla stonk' })],
+    });
+    expect(plays[0].bookFit).toBe('new');
+    expect(plays[0].decision).toBe('watch');
+    expect(plays[0].bookEdge).not.toMatch(/\$/);
+  });
+
+  it('sizes a fitting runner with liquidity over the floor, capped by the name and cash rules', () => {
+    const { book: b, plays } = buildPlays({ handle: 'BusyMereDog', book: book(), tape: [tape({})] });
+    expect(b.vetoes).toEqual([]);
+    expect(plays[0]).toMatchObject({ decision: 'size', sizeCapUsd: 1_500, bookFit: 'fits' });
+    expect(plays[0]).toMatchObject({ marketCapUsd: 30_000, change5mPct: 3, buys1h: 70, runnerScore: 100 });
+  });
+
+  it('skips held mints, dropped majors and thin liquidity; uses SoftMereElk floors', () => {
+    const busy = buildPlays({
       handle: 'BusyMereDog',
       book: book(),
       tape: [
         tape({ mint: 'HeldMint1pump' }),
         tape({ mint: 'sol', symbol: 'USDC' }),
-        tape({ mint: 'Plain1', dexId: 'uniswap', symbol: 'ZZZ', name: 'Zzz' }),
         tape({ mint: 'Thin1pump', liquidityUsd: 2_000 }),
-        tape({ mint: 'Base1', chain: 'ethereum' }),
+        tape({ mint: 'Eth1', chain: 'ethereum' }),
       ],
     });
-    expect(plays).toEqual([]);
-  });
-
-  it('uses the larger floors for SoftMereElk', () => {
-    const { book: b, plays } = buildPlays({
+    expect(busy.plays).toEqual([]);
+    const soft = buildPlays({
       handle: 'SoftMereElk',
       book: book({ equity: 300_000, cash: 90_000 }),
-      tape: [tape({ liquidityUsd: 10_000 }), tape({ mint: 'Mid1pump', liquidityUsd: 20_000 })],
+      tape: [tape({ liquidityUsd: 10_000 }), tape({ mint: 'Mid1pump', symbol: 'MID', liquidityUsd: 20_000 })],
     });
-    expect(b.sizeFloorLiq).toBe(40_000);
-    expect(plays.map((p) => p.mint)).toEqual(['Mid1pump']);
-    expect(plays[0].decision).toBe('watch');
-    expect(plays[0].vetoes[0]).toContain('size floor');
+    expect(soft.book.sizeFloorLiq).toBe(40_000);
+    expect(soft.plays.map((p) => p.mint)).toEqual(['Mid1pump']);
+    expect(soft.plays[0].decision).toBe('watch');
   });
 
   it('turns every card into a $0 watch when the book has 0% cash and a double-digit drawdown', () => {
     const { book: b, plays } = buildPlays({
       handle: 'BusyMereDog',
       book: book({ cash: 0, drawdown: -14 }),
-      tape: [tape({}), tape({ mint: 'Two1pump', liquidityUsd: 50_000 })],
+      tape: [tape({}), tape({ mint: 'Two1pump', symbol: 'TWO', liquidityUsd: 50_000 })],
     });
-    expect(b.vetoes.length).toBe(2);
-    expect(plays.length).toBe(2);
-    for (const p of plays) {
-      expect(p.decision).toBe('watch');
-      expect(p.sizeCapUsd).toBe(0);
-      expect(p.vetoes[0]).toContain('Cash 0%');
-    }
+    expect(b.vetoes).toHaveLength(2);
+    expect(plays).toHaveLength(2);
+    for (const p of plays) expect(p).toMatchObject({ decision: 'watch', sizeCapUsd: 0 });
+
     const text = compactPlays({ book: null, plays, books: [b], tapeCount: 2 });
-    expect(text).toContain('[watch]');
-    expect(text).toContain('Cash 0% is under the 20% floor');
+    expect(text.match(/cash 0% under the 20% floor/g)).toHaveLength(1);
     const prompt = chatPrompt([{ role: 'user', content: 'Why is nothing a size?' }], {
       book: book({ cash: 0, drawdown: -14 }),
       plays,
       books: [b],
     });
-    expect(prompt).toContain('LIVE BOOK');
-    expect(prompt).toContain(`SCANNER`);
-    expect(prompt).toContain(`1. ${plays[0].symbol} [watch]`);
-    expect(prompt).toContain('Drawdown -14.0% is past the -8% cut');
-  });
-
-  it('marks an unpaid overlap as watch', () => {
-    const { plays } = buildPlays({
-      handle: 'BusyMereDog',
-      book: book(),
-      tape: [tape({ mint: 'S1', dexId: 'stonkfun', symbol: 'TSLAX', name: 'tsla stonk' })],
-    });
-    expect(plays[0].decision).toBe('watch');
-    expect(plays[0].vetoes.join(' ')).toContain('has not paid');
+    expect(prompt).toContain(`1. ${plays[0].symbol} EARLY`);
+    expect(prompt).toContain('drawdown −14% past the −8% cut');
   });
 });
 
 describe('applyBookVetoes', () => {
-  it('forces watch with cap 0 when the on-screen book vetoes', () => {
-    const { plays } = buildPlays({ handle: 'BusyMereDog', book: book(), tape: [tape({})] });
-    const out = applyBookVetoes(plays, ['Drawdown -12.0% is past the -8% cut — size down']);
-    expect(out[0]).toMatchObject({ decision: 'watch', sizeCapUsd: 0, lastCall: 'WAIT_BOOK' });
-  });
-
-  it('replaces the route copy of the book vetoes instead of listing both', () => {
+  it('forces watch with cap 0 and replaces the route copy of the book vetoes', () => {
     const { book: b, plays } = buildPlays({
       handle: 'BusyMereDog',
       book: book({ cash: 0, drawdown: -14 }),
       tape: [tape({})],
     });
-    const onScreen = ['Cash 1% is under the 20% floor'];
+    const onScreen = ['cash 1% under the 20% floor'];
     const out = applyBookVetoes(plays, onScreen, b.vetoes);
-    expect(out[0].vetoes).toEqual(onScreen);
+    expect(out[0]).toMatchObject({ decision: 'watch', sizeCapUsd: 0, vetoes: onScreen });
   });
 });
 
 describe('tape rows', () => {
-  it('parses Dex pairs and Gecko pools', () => {
+  it('reads mcap, fdv, launch time, 5m/1h/6h and 1h txns from the Dex pair', () => {
     const dex = rowFromDexPair(
       {
         chainId: 'solana',
@@ -224,13 +277,32 @@ describe('tape rows', () => {
         quoteToken: { symbol: 'SOL' },
         liquidity: { usd: 12_000 },
         volume: { h1: 500 },
-        priceChange: { h1: 22.5 },
+        priceChange: { m5: -2, h1: 22.5, h6: 71 },
+        txns: { h1: { buys: 84, sells: 40 } },
+        marketCap: 30_000,
+        fdv: 90_000,
         pairCreatedAt: 3_600_000,
       },
       ['dex-boost'],
       7_200_000,
     );
-    expect(dex).toMatchObject({ mint: 'M1pump', liquidityUsd: 12_000, change1hPct: 22.5, ageHours: 1 });
+    expect(dex).toMatchObject({
+      mint: 'M1pump',
+      liquidityUsd: 12_000,
+      marketCapUsd: 30_000,
+      fdvUsd: 90_000,
+      launchedAt: new Date(3_600_000).toISOString(),
+      change5mPct: -2,
+      change1hPct: 22.5,
+      change6hPct: 71,
+      buys1h: 84,
+      sells1h: 40,
+      ageHours: 1,
+    });
+    const noCap = rowFromDexPair({ chainId: 'solana', baseToken: { address: 'Z' }, fdv: 5_000 }, []);
+    expect(noCap?.marketCapUsd).toBeNull();
+    expect(noCap?.fdvUsd).toBe(5_000);
+
     const gecko = rowFromGeckoPool(
       {
         attributes: {

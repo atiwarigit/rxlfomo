@@ -1738,8 +1738,10 @@ async function loadPortfolio(input) {
 }
 
 // src/lib/scanner/rules.ts
-var RULES = { maxNamePct: 15, minCashPct: 20, drawdownCutPct: -8 };
+var RULES = { maxNamePct: 15, minCashPct: 20, drawdownCutPct: -8, maxTop3Pct: 45 };
 var SCAN_CHAINS = /* @__PURE__ */ new Set(["solana", "base", "bsc"]);
+var MAX_RUNNER_AGE_HOURS = 48;
+var MIN_RUNNER_SCORE = 30;
 var DROP_SYMBOLS = /* @__PURE__ */ new Set(["SOL", "WSOL", "USDC", "USDT", "ETH", "WETH", "BNB", "WBNB"]);
 var SMALL_BOOK = { minLiq: 3e3, sizeFloorLiq: 8e3 };
 var LARGE_BOOK = { minLiq: 15e3, sizeFloorLiq: 4e4 };
@@ -1766,35 +1768,49 @@ function scannerLaunchpad(dexId, mint) {
   if (/^(raydium|meteora|orca)/.test(d)) return "Direct / DEX";
   return void 0;
 }
+function signedPct(v) {
+  return `${v < 0 ? "\u2212" : ""}${Math.abs(v).toFixed(0)}%`;
+}
+function bookNumbers(snap) {
+  const s = snap.summary;
+  const equity = s.totalEquity || 0;
+  const top3 = [...snap.openPositions].map((p) => p.sizeUsd).sort((a, b) => b - a).slice(0, 3).reduce((a, b) => a + b, 0);
+  return {
+    equity,
+    cashPct: equity > 0 ? s.cashUsd / equity * 100 : 0,
+    drawdownPct: s.currentDrawdownPct || 0,
+    top3Pct: equity > 0 ? top3 / equity * 100 : 0
+  };
+}
 function bookVetoes(input) {
   const out = [];
-  if (!(input.equity > 0)) out.push("Book did not load live equity \u2014 nothing sizes off an empty book");
+  if (!(input.equity > 0)) out.push("book did not load live equity");
   if (input.cashPct < RULES.minCashPct) {
-    out.push(`Cash ${input.cashPct.toFixed(0)}% is under the ${RULES.minCashPct}% floor`);
+    out.push(`cash ${input.cashPct.toFixed(0)}% under the ${RULES.minCashPct}% floor`);
   }
   if (input.drawdownPct <= RULES.drawdownCutPct) {
-    out.push(`Drawdown ${input.drawdownPct.toFixed(1)}% is past the ${RULES.drawdownCutPct}% cut \u2014 size down`);
+    out.push(`drawdown ${signedPct(input.drawdownPct)} past the ${signedPct(RULES.drawdownCutPct)} cut`);
+  }
+  if ((input.top3Pct ?? 0) > RULES.maxTop3Pct) {
+    out.push(`top 3 names ${input.top3Pct.toFixed(0)}% over the ${RULES.maxTop3Pct}% cap`);
   }
   return out;
 }
 function bookFromSnapshot(handle, snap) {
-  const s = snap.summary;
-  const equity = s.totalEquity || 0;
-  const cashPct = equity > 0 ? s.cashUsd / equity * 100 : 0;
-  const drawdownPct2 = s.currentDrawdownPct || 0;
+  const nums = bookNumbers(snap);
   return {
     handle,
-    equity,
-    cashPct,
-    drawdownPct: drawdownPct2,
-    vetoes: bookVetoes({ equity, cashPct, drawdownPct: drawdownPct2 }),
-    sizeFloorLiq: floorsFor(handle, equity).sizeFloorLiq
+    equity: nums.equity,
+    cashPct: nums.cashPct,
+    drawdownPct: nums.drawdownPct,
+    vetoes: bookVetoes(nums),
+    sizeFloorLiq: floorsFor(handle, nums.equity).sizeFloorLiq
   };
 }
 function bump(map, label) {
   let row = map.get(label);
   if (!row) {
-    row = { label, openUsd: 0, realizedUsd: 0, closes: 0, wins: 0, dripPays: 0 };
+    row = { label, realizedUsd: 0, closes: 0, wins: 0, dripPays: 0 };
     map.set(label, row);
   }
   return row;
@@ -1808,14 +1824,9 @@ function bookProfile(snap) {
   const held = /* @__PURE__ */ new Set();
   for (const p of snap.openPositions) {
     if (p.mint) held.add(mintKey(p.mint));
-    const rows = [
-      ...p.launchpad ? [bump(launchpads, p.launchpad)] : [],
-      ...(p.narratives || []).filter((t) => t !== "Other").map((t) => bump(themes, t))
-    ];
-    for (const row of rows) {
-      row.openUsd += p.sizeUsd;
-      if (p.dripPays) row.dripPays += 1;
-    }
+    if (!p.dripPays) continue;
+    if (p.launchpad) bump(launchpads, p.launchpad).dripPays += 1;
+    for (const t of p.narratives || []) if (t !== "Other") bump(themes, t).dripPays += 1;
   }
   for (const t of snap.closedTrades) {
     const rows = [
@@ -1831,7 +1842,28 @@ function bookProfile(snap) {
   return { launchpads, themes, held };
 }
 function paid(row) {
-  return row.realizedUsd > 0 || row.dripPays > 0;
+  return Boolean(row && (row.wins > 0 || row.dripPays > 0));
+}
+function runnerScore(input) {
+  const age = input.ageHours;
+  const fresh = age == null ? 0 : age < 2 ? 30 : age < 6 ? 22 : age < 24 ? 12 : age < 48 ? 4 : 0;
+  const chg = input.change1hPct;
+  const early = chg == null || chg < 0 ? 0 : chg >= 8 && chg <= 45 ? 20 : chg > 80 ? 4 : 10;
+  const buys = input.buys1h ?? 0;
+  const txns = buys + (input.sells1h ?? 0);
+  const share = txns > 0 ? buys / txns : null;
+  const buyers = share == null ? 0 : share >= 0.58 && txns >= 40 ? 20 : share < 0.45 ? 0 : 10;
+  const liq = input.liquidityUsd;
+  const exit = liq >= input.floors.sizeFloorLiq ? 20 : liq < input.floors.minLiq ? 0 : 10;
+  const turnover = liq > 0 ? input.volume1hUsd / liq : Infinity;
+  const wash = turnover < 8 ? 10 : turnover > 20 ? 0 : 5;
+  return fresh + early + buyers + exit + wash;
+}
+function runnerLabel(score) {
+  if (score >= 75) return "early";
+  if (score >= 50) return "building";
+  if (score >= MIN_RUNNER_SCORE) return "chase";
+  return null;
 }
 var SOURCE_LABEL = {
   "dex-boost": "Dex boost",
@@ -1840,32 +1872,29 @@ var SOURCE_LABEL = {
   "gecko-trending": "Gecko trending 1h"
 };
 function usd(v) {
-  const sign = v < 0 ? "-" : "";
   const a = Math.abs(v);
-  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(1)}M`;
-  if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k`;
-  return `${sign}$${a.toFixed(0)}`;
+  if (a >= 1e6) return `$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `$${(a / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k`;
+  return `$${a.toFixed(0)}`;
 }
-function edgeLine(row) {
-  const bits = [`open ${usd(row.openUsd)}`];
-  if (row.closes) bits.push(`${row.wins}/${row.closes} wins, realized ${usd(row.realizedUsd)}`);
-  if (row.dripPays) bits.push(`${row.dripPays} drip payer${row.dripPays > 1 ? "s" : ""}`);
-  return `${row.label}: ${bits.join(", ")}`;
+function ageText(h) {
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))}m`;
+  if (h < 48) return `${h.toFixed(0)}h`;
+  return `${Math.round(h / 24)}d`;
 }
-function clamp01(v) {
-  return Math.max(0, Math.min(1, v));
-}
-function scorePlay(input) {
-  let edge = 0;
-  if (input.padRow) edge += paid(input.padRow) ? 25 : 12;
-  for (const t of input.themeRows) edge += paid(t) ? 15 : 6;
-  edge = Math.min(40, edge);
-  const liq = clamp01(Math.log10(Math.max(1, input.liquidityUsd / input.minLiq)) / 1.5) * 20;
-  const flow = input.liquidityUsd > 0 ? clamp01(input.volume1hUsd / input.liquidityUsd / 0.5) * 20 : 0;
-  const chg = input.change1hPct ?? 0;
-  const momentum = chg <= 0 ? 0 : chg <= 50 ? chg / 50 * 10 : chg <= 100 ? 10 : 5;
-  const tape = Math.min(10, input.sources.length * 3.4);
-  return Math.round(edge + liq + flow + momentum + tape);
+function dedupe(plays) {
+  const seenMint = /* @__PURE__ */ new Set();
+  const seenSymbol = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const p of plays) {
+    const m = `${p.chain}:${mintKey(p.mint)}`;
+    const sym = p.symbol.trim().toUpperCase();
+    if (seenMint.has(m) || seenSymbol.has(sym)) continue;
+    seenMint.add(m);
+    seenSymbol.add(sym);
+    out.push(p);
+  }
+  return out;
 }
 function buildPlays(input) {
   const book = bookFromSnapshot(input.handle, input.book);
@@ -1878,33 +1907,34 @@ function buildPlays(input) {
     if (!SCAN_CHAINS.has(row.chain) || droppedSymbol(row.symbol)) continue;
     if (profile.held.has(mintKey(row.mint))) continue;
     if (row.liquidityUsd < floors.minLiq) continue;
+    if (row.ageHours == null || row.ageHours > MAX_RUNNER_AGE_HOURS) continue;
+    const score = runnerScore({ ...row, floors });
+    const label = runnerLabel(score);
+    if (!label) continue;
     const launchpad = scannerLaunchpad(row.dexId, row.mint);
     const themes = narrativesFor({ symbol: row.symbol, name: row.name, quote: row.quoteSymbol }).filter(
       (t) => t !== "Other"
     );
     const padRow = launchpad ? profile.launchpads.get(launchpad) : void 0;
-    const themeRows = themes.map((t) => profile.themes.get(t)).filter((r) => Boolean(r));
-    if (!padRow && !themeRows.length) continue;
+    const fitTheme = themes.find((t) => paid(profile.themes.get(t)));
+    const fitsPad = paid(padRow);
+    const bookFit = fitsPad || fitTheme ? "fits" : "new";
+    const bookEdge = fitsPad ? `Fits ${launchpad}` : fitTheme ? `Fits ${fitTheme.toLowerCase()}` : "New to this book";
     const cardVetoes = [];
     if (row.liquidityUsd < floors.sizeFloorLiq) {
-      cardVetoes.push(`Liquidity ${usd(row.liquidityUsd)} is under the ${usd(floors.sizeFloorLiq)} size floor`);
+      cardVetoes.push(`liquidity ${usd(row.liquidityUsd)} under the ${usd(floors.sizeFloorLiq)} size floor`);
     }
-    const anyPaid = padRow && paid(padRow) || themeRows.some(paid);
-    if (!anyPaid) {
-      const names = [padRow?.label, ...themeRows.map((r) => r.label)].filter(Boolean).join(" / ");
-      cardVetoes.push(`${names} has not paid this book yet (no realized win or drip)`);
-    }
+    if (bookFit === "new") cardVetoes.push("no realized win or drip on this launchpad or theme yet");
     const rawCap = Math.floor(Math.min(nameCap, cashAboveFloor));
     if (!book.vetoes.length && !cardVetoes.length && rawCap <= 0) {
-      cardVetoes.push(`No cash above the ${RULES.minCashPct}% floor to size with`);
+      cardVetoes.push(`no cash above the ${RULES.minCashPct}% floor`);
     }
     const vetoes = [...book.vetoes, ...cardVetoes];
     const decision = vetoes.length ? "watch" : "size";
     const sizeCapUsd = decision === "size" ? rawCap : 0;
-    const bookEdge = [padRow, ...themeRows].filter((r) => Boolean(r)).map(edgeLine).join(" \xB7 ");
-    const lastCall = decision === "size" ? `SIZE_UP_TO_${sizeCapUsd}` : book.vetoes.length ? "WAIT_BOOK" : row.liquidityUsd < floors.sizeFloorLiq ? "WAIT_LIQ" : "WATCH_EDGE";
-    const where = launchpad || "an unknown launchpad";
-    const reason = decision === "size" ? `${row.symbol} launched on ${where} overlaps a bucket that has paid this book, and ${usd(row.liquidityUsd)} liquidity clears the ${usd(floors.sizeFloorLiq)} floor.` : `Watch only: ${vetoes[0]}.`;
+    const buys = row.buys1h ?? 0;
+    const txns = buys + (row.sells1h ?? 0);
+    const chg = row.change1hPct;
     plays.push({
       account: input.handle,
       mint: row.mint,
@@ -1912,32 +1942,34 @@ function buildPlays(input) {
       chain: row.chain,
       launchpad: launchpad || "Unknown",
       themes,
-      trigger: row.sources.map((s) => SOURCE_LABEL[s]).join(" + ") || "tape",
+      trigger: row.sources.map((x) => SOURCE_LABEL[x]).join(" + ") || "tape",
       bookEdge,
+      bookFit,
       sizeCapUsd,
       vetoes,
       decision,
-      lastCall,
-      reason,
-      score: scorePlay({
-        padRow,
-        themeRows,
-        liquidityUsd: row.liquidityUsd,
-        volume1hUsd: row.volume1hUsd,
-        change1hPct: row.change1hPct,
-        sources: row.sources,
-        minLiq: floors.minLiq
-      }),
+      lastCall: decision === "size" ? `SIZE_UP_TO_${sizeCapUsd}` : `WATCH_${label.toUpperCase()}`,
+      reason: `Launched ${ageText(row.ageHours)} ago, ${chg == null ? "1h n/a" : `${chg >= 0 ? "+" : ""}${chg.toFixed(0)}% in 1h`}, ${txns ? `${Math.round(buys / txns * 100)}% buys over ${txns} txns` : "no 1h txns"}, ${usd(row.liquidityUsd)} liquidity.`,
+      score,
+      runnerScore: score,
+      runnerLabel: label,
       liquidityUsd: row.liquidityUsd,
       volume1hUsd: row.volume1hUsd,
+      marketCapUsd: row.marketCapUsd,
+      fdvUsd: row.fdvUsd,
+      launchedAt: row.launchedAt,
+      change5mPct: row.change5mPct,
       change1hPct: row.change1hPct,
+      change6hPct: row.change6hPct,
+      buys1h: row.buys1h,
+      sells1h: row.sells1h,
       ageHours: row.ageHours,
       pairUrl: row.pairUrl,
       sources: row.sources
     });
   }
-  plays.sort((a, b) => b.score - a.score || b.liquidityUsd - a.liquidityUsd);
-  return { book, plays: plays.slice(0, input.limit ?? 12) };
+  plays.sort((a, b) => b.runnerScore - a.runnerScore || b.liquidityUsd - a.liquidityUsd);
+  return { book, plays: dedupe(plays).slice(0, input.limit ?? 12) };
 }
 
 // src/lib/scanner/tape.ts
@@ -1966,6 +1998,10 @@ function numOrNull(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+function positiveOrNull(v) {
+  const n = numOrNull(v);
+  return n != null && n > 0 ? n : null;
+}
 function rowFromDexPair(pair, sources, now = Date.now()) {
   const mint = pair.baseToken?.address;
   const chain = pair.chainId || "";
@@ -1979,7 +2015,14 @@ function rowFromDexPair(pair, sources, now = Date.now()) {
     quoteSymbol: pair.quoteToken?.symbol || "",
     liquidityUsd: num(pair.liquidity?.usd),
     volume1hUsd: num(pair.volume?.h1),
+    marketCapUsd: positiveOrNull(pair.marketCap),
+    fdvUsd: positiveOrNull(pair.fdv),
+    launchedAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt).toISOString() : null,
+    change5mPct: numOrNull(pair.priceChange?.m5),
     change1hPct: numOrNull(pair.priceChange?.h1),
+    change6hPct: numOrNull(pair.priceChange?.h6),
+    buys1h: numOrNull(pair.txns?.h1?.buys),
+    sells1h: numOrNull(pair.txns?.h1?.sells),
     ageHours: pair.pairCreatedAt ? Math.max(0, (now - pair.pairCreatedAt) / 36e5) : null,
     pairUrl: pair.url || `https://dexscreener.com/${chain}/${mint}`,
     sources: [...sources]
@@ -2000,7 +2043,14 @@ function rowFromGeckoPool(pool, source, now = Date.now()) {
     quoteSymbol: quote.trim(),
     liquidityUsd: num(a.reserve_in_usd),
     volume1hUsd: num(a.volume_usd?.h1),
+    marketCapUsd: positiveOrNull(a.market_cap_usd),
+    fdvUsd: positiveOrNull(a.fdv_usd),
+    launchedAt: Number.isFinite(created) ? new Date(created).toISOString() : null,
+    change5mPct: numOrNull(a.price_change_percentage?.m5),
     change1hPct: numOrNull(a.price_change_percentage?.h1),
+    change6hPct: numOrNull(a.price_change_percentage?.h6),
+    buys1h: numOrNull(a.transactions?.h1?.buys),
+    sells1h: numOrNull(a.transactions?.h1?.sells),
     ageHours: Number.isFinite(created) ? Math.max(0, (now - created) / 36e5) : null,
     pairUrl: `https://www.geckoterminal.com/solana/pools/${a.address || ""}`,
     sources: [source]
@@ -2053,6 +2103,27 @@ async function loadTape(fetchFn) {
   };
   add(boosts, "dex-boost");
   add(profiles, "dex-profile");
+  const geckoRows = /* @__PURE__ */ new Map();
+  const gecko = [
+    [fresh.data || [], "gecko-new"],
+    [trending.data || [], "gecko-trending"]
+  ];
+  for (const [pools, source] of gecko) {
+    for (const pool of pools) {
+      const row = rowFromGeckoPool(pool, source);
+      if (!row) continue;
+      const k = key2(row.chain, row.mint);
+      const prev = geckoRows.get(k);
+      if (prev) {
+        if (!prev.sources.includes(source)) prev.sources.push(source);
+      } else {
+        geckoRows.set(k, row);
+      }
+      const listedRow = listed.get(k) || { chain: row.chain, mint: row.mint, sources: [] };
+      if (!listedRow.sources.includes(source)) listedRow.sources.push(source);
+      listed.set(k, listedRow);
+    }
+  }
   const byChain = /* @__PURE__ */ new Map();
   for (const row of listed.values()) {
     const list = byChain.get(row.chain) || [];
@@ -2076,25 +2147,9 @@ async function loadTape(fetchFn) {
   const rows = /* @__PURE__ */ new Map();
   for (const [k, it] of listed) {
     const pair = pairs.get(k);
-    const row = pair ? rowFromDexPair(pair, it.sources) : null;
+    const fallback = geckoRows.get(k);
+    const row = pair ? rowFromDexPair(pair, it.sources) : fallback ? { ...fallback, sources: it.sources } : null;
     if (row) rows.set(k, row);
-  }
-  const gecko = [
-    [fresh.data || [], "gecko-new"],
-    [trending.data || [], "gecko-trending"]
-  ];
-  for (const [pools, source] of gecko) {
-    for (const pool of pools) {
-      const row = rowFromGeckoPool(pool, source);
-      if (!row) continue;
-      const k = key2(row.chain, row.mint);
-      const prev = rows.get(k);
-      if (prev) {
-        if (!prev.sources.includes(source)) prev.sources.push(source);
-      } else {
-        rows.set(k, row);
-      }
-    }
   }
   return {
     rows: [...rows.values()].filter((r) => !droppedSymbol(r.symbol)),
