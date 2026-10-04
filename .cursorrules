@@ -11,3 +11,4 @@
 - Desk chat is JSON POST /api/chat (generateText, not streaming). LLM keys: LLM_API_KEY / AI_GATEWAY_API_KEY / OPENAI_API_KEY on the server, or x-llm-api-key from Sources. Default model gpt-5.4. Never commit keys.
 - FOMO tape is often empty or stale. Overlay spotlight + Relay cost basis onto the wallet, Dex 24h when there is no entry, and never fake $0 unrealized as a real P&L.
 - Scanner: /api/plays (server/vercel-plays.ts → api/plays.js) loads the book with loadPortfolio and an empty FOMO key — never spend fomoapi credits there. All scanner rules live in src/lib/scanner/rules.ts; cards never carry buy/sell/sign actions, and any book veto makes every card watch with cap 0.
+- Scanner cards rank by runnerScore (fresh/early/buyers/exit/wash) and ignore the book; the book only flips watch vs size and its veto is shown once in the tab header, never on cards. Drop pairs older than 48h. Never derive market cap from FDV.
