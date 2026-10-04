@@ -52,20 +52,23 @@ export async function runPortfolioChat(input: {
     apiKey: input.apiKey.trim(),
     ...(input.baseUrl ? { baseURL: input.baseUrl.replace(/\/$/, '') } : {}),
   });
-  const snap = input.snapshot;
+  const { text } = await generateText({
+    model: openai(modelId.replace(/^openai\//, '')),
+    system: SYSTEM,
+    prompt: chatPrompt(input.messages, input.snapshot),
+    abortSignal: AbortSignal.timeout(55_000),
+  });
+  return { text: text.trim(), model: modelId };
+}
+
+export function chatPrompt(messages: ChatTurn[], snap?: ChatSnapshot | null): string {
   const portfolio = isScannerSnapshot(snap) ? snap.book : snap;
   const book = portfolio ? compactBook(portfolio) : 'No live book is loaded.';
   const scanner = isScannerSnapshot(snap) ? `\n\nSCANNER\n${compactPlays(snap)}` : '';
-  const history = input.messages
+  const history = messages
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim())
     .slice(-12)
     .map((m) => `${m.role === 'user' ? 'Operator' : 'Desk'}: ${m.content.trim()}`)
     .join('\n');
-  const { text } = await generateText({
-    model: openai(modelId.replace(/^openai\//, '')),
-    system: SYSTEM,
-    prompt: `LIVE BOOK\n${book}${scanner}\n\nTHREAD\n${history || '(none yet)'}\n\nReply as Desk.`,
-    abortSignal: AbortSignal.timeout(55_000),
-  });
-  return { text: text.trim(), model: modelId };
+  return `LIVE BOOK\n${book}${scanner}\n\nTHREAD\n${history || '(none yet)'}\n\nReply as Desk.`;
 }

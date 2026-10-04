@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PortfolioSnapshot, Position } from '../../types/portfolio.ts';
 import type { TapeRow } from '../../types/plays.ts';
 import { compactPlays } from '../ai/bookContext.ts';
+import { chatPrompt } from '../ai/runChat.ts';
 import { applyBookVetoes, bookVetoes, buildPlays, scannerLaunchpad } from './rules.ts';
 import { rowFromDexPair, rowFromGeckoPool } from './tape.ts';
 
@@ -171,6 +172,15 @@ describe('buildPlays', () => {
     const text = compactPlays({ book: null, plays, books: [b], tapeCount: 2 });
     expect(text).toContain('[watch]');
     expect(text).toContain('Cash 0% is under the 20% floor');
+    const prompt = chatPrompt([{ role: 'user', content: 'Why is nothing a size?' }], {
+      book: book({ cash: 0, drawdown: -14 }),
+      plays,
+      books: [b],
+    });
+    expect(prompt).toContain('LIVE BOOK');
+    expect(prompt).toContain(`SCANNER`);
+    expect(prompt).toContain(`1. ${plays[0].symbol} [watch]`);
+    expect(prompt).toContain('Drawdown -14.0% is past the -8% cut');
   });
 
   it('marks an unpaid overlap as watch', () => {

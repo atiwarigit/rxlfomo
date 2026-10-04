@@ -186,27 +186,29 @@ async function runPortfolioChat(input) {
     apiKey: input.apiKey.trim(),
     ...input.baseUrl ? { baseURL: input.baseUrl.replace(/\/$/, "") } : {}
   });
-  const snap = input.snapshot;
+  const { text } = await generateText({
+    model: openai(modelId.replace(/^openai\//, "")),
+    system: SYSTEM,
+    prompt: chatPrompt(input.messages, input.snapshot),
+    abortSignal: AbortSignal.timeout(55e3)
+  });
+  return { text: text.trim(), model: modelId };
+}
+function chatPrompt(messages, snap) {
   const portfolio = isScannerSnapshot(snap) ? snap.book : snap;
   const book = portfolio ? compactBook(portfolio) : "No live book is loaded.";
   const scanner = isScannerSnapshot(snap) ? `
 
 SCANNER
 ${compactPlays(snap)}` : "";
-  const history = input.messages.filter((m) => (m.role === "user" || m.role === "assistant") && m.content.trim()).slice(-12).map((m) => `${m.role === "user" ? "Operator" : "Desk"}: ${m.content.trim()}`).join("\n");
-  const { text } = await generateText({
-    model: openai(modelId.replace(/^openai\//, "")),
-    system: SYSTEM,
-    prompt: `LIVE BOOK
+  const history = messages.filter((m) => (m.role === "user" || m.role === "assistant") && m.content.trim()).slice(-12).map((m) => `${m.role === "user" ? "Operator" : "Desk"}: ${m.content.trim()}`).join("\n");
+  return `LIVE BOOK
 ${book}${scanner}
 
 THREAD
 ${history || "(none yet)"}
 
-Reply as Desk.`,
-    abortSignal: AbortSignal.timeout(55e3)
-  });
-  return { text: text.trim(), model: modelId };
+Reply as Desk.`;
 }
 
 // server/vercel-chat.ts
