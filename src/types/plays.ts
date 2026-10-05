@@ -79,6 +79,8 @@ export interface Play {
   twitter?: string;
   telegram?: string;
   sources: TapeSource[];
+  /** Not on the previous board this route served for the handle. */
+  arrived?: boolean;
 }
 
 export interface PlaysResponse {

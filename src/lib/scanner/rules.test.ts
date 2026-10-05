@@ -4,15 +4,16 @@ import type { TapeRow } from '../../types/plays.ts';
 import { compactPlays } from '../ai/bookContext.ts';
 import { chatPrompt } from '../ai/runChat.ts';
 import {
-  applyBookVetoes,
+  applyBook,
   bookVetoes,
+  buildRunners,
   buildPlays,
   runnerLabel,
   runnerScore,
   scannerLaunchpad,
   vetoSentence,
 } from './rules.ts';
-import { rowFromDexPair, rowFromGeckoPool } from './tape.ts';
+import { pickPairBatch, rowFromDexPair, rowFromGeckoPool } from './tape.ts';
 
 function pos(over: Partial<Position>): Position {
   return {
@@ -267,16 +268,50 @@ describe('buildPlays', () => {
   });
 });
 
-describe('applyBookVetoes', () => {
-  it('forces watch with cap 0 and replaces the route copy of the book vetoes', () => {
-    const { book: b, plays } = buildPlays({
+describe('live board', () => {
+  it('builds without a book: newest pool first, capped at 12, arrived vs the previous board', () => {
+    const rows = Array.from({ length: 15 }, (_, i) =>
+      tape({ mint: `M${i}pump`, symbol: `T${i}`, ageHours: 0.1 + i }),
+    );
+    const first = buildRunners({ handle: 'BusyMereDog', tape: rows });
+    expect(first).toHaveLength(12);
+    expect(first[0].symbol).toBe('T0');
+    expect(first.every((p) => !p.arrived && p.decision === 'watch')).toBe(true);
+    const next = buildRunners({
       handle: 'BusyMereDog',
-      book: book({ cash: 0, drawdown: -14 }),
-      tape: [tape({})],
+      tape: [tape({ mint: 'Brand1pump', symbol: 'BRAND', ageHours: 0.05 }), ...rows],
+      previous: new Set(first.map((p) => p.mint)),
     });
-    const onScreen = ['cash 1% under the 20% floor'];
-    const out = applyBookVetoes(plays, onScreen, b.vetoes);
-    expect(out[0]).toMatchObject({ decision: 'watch', sizeCapUsd: 0, vetoes: onScreen });
+    expect(next[0]).toMatchObject({ symbol: 'BRAND', arrived: true });
+    expect(next.filter((p) => p.arrived).map((p) => p.symbol)).toEqual(['BRAND']);
+  });
+
+  it('applies the on-screen book on the page: held mints drop, vetoes force watch at $0', () => {
+    const runners = buildRunners({
+      handle: 'BusyMereDog',
+      tape: [tape({ mint: 'HeldMint1pump', symbol: 'HELD' }), tape({})],
+    });
+    expect(runners).toHaveLength(2);
+    const ok = applyBook('BusyMereDog', book(), runners);
+    expect(ok.plays.map((p) => p.symbol)).toEqual(['NEWDOG']);
+    expect(ok.plays[0]).toMatchObject({ decision: 'size', bookEdge: 'Fits animals' });
+    const vetoed = applyBook('BusyMereDog', book({ cash: 0, drawdown: -14 }), runners);
+    expect(vetoed.plays[0]).toMatchObject({ decision: 'watch', sizeCapUsd: 0 });
+    const noBook = applyBook('BusyMereDog', null, runners);
+    expect(noBook.book.vetoes).toEqual(['book not loaded yet']);
+    expect(noBook.plays.every((p) => p.decision === 'watch')).toBe(true);
+  });
+
+  it('refreshes new mints first, then the stalest, at most 30 per tick', () => {
+    const now = 100_000;
+    const filled = new Map<string, { at: number }>([
+      ['a', { at: now - 1_000 }],
+      ['b', { at: now - 30_000 }],
+      ['c', { at: now - 13_000 }],
+    ]);
+    expect(pickPairBatch(['a', 'b', 'c', 'd'], filled, now)).toEqual(['d', 'b', 'c']);
+    const many = Array.from({ length: 50 }, (_, i) => `k${i}`);
+    expect(pickPairBatch(many, new Map(), now)).toHaveLength(30);
   });
 });
 

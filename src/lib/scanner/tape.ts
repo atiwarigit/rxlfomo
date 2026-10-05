@@ -3,7 +3,10 @@ import { SCAN_CHAINS, droppedSymbol } from './rules.ts';
 
 const DEX = 'https://api.dexscreener.com';
 const GECKO = 'https://api.geckoterminal.com/api/v2';
-export const TAPE_TTL_MS = 45_000;
+export const TAPE_TTL_MS = 12_000;
+export const PAIR_TTL_MS = 12_000;
+export const PAIR_BATCH = 30;
+const PAIR_KEEP_MS = 10 * 60_000;
 
 interface TapeResult {
   rows: TapeRow[];
@@ -13,10 +16,12 @@ interface TapeResult {
 
 let cache: TapeResult | null = null;
 let inflight: Promise<TapeResult> | null = null;
+const pairs = new Map<string, { at: number; pair: DexPair }>();
 
 export function clearTapeCache() {
   cache = null;
   inflight = null;
+  pairs.clear();
 }
 
 async function getJson<T>(url: string, fetchFn: typeof fetch, timeoutMs = 8_000): Promise<T> {
@@ -153,9 +158,9 @@ export function rowFromGeckoPool(pool: GeckoPool, source: TapeSource, now = Date
   };
 }
 
-function bestPairs(pairs: DexPair[]): Map<string, DexPair> {
+function bestPairs(list: DexPair[]): Map<string, DexPair> {
   const out = new Map<string, DexPair>();
-  for (const p of pairs) {
+  for (const p of list) {
     const mint = p.baseToken?.address;
     if (!mint || !p.chainId) continue;
     const k = key(p.chainId, mint);
@@ -165,7 +170,21 @@ function bestPairs(pairs: DexPair[]): Map<string, DexPair> {
   return out;
 }
 
-async function loadTape(fetchFn: typeof fetch): Promise<TapeResult> {
+/** New mints first, then the stalest; anything filled within PAIR_TTL_MS is skipped. */
+export function pickPairBatch(
+  keys: string[],
+  filled: Map<string, { at: number }>,
+  now: number,
+  cap = PAIR_BATCH,
+): string[] {
+  const fresh = keys.filter((k) => !filled.has(k));
+  const stale = keys
+    .filter((k) => filled.has(k) && now - filled.get(k)!.at >= PAIR_TTL_MS)
+    .sort((a, b) => filled.get(a)!.at - filled.get(b)!.at);
+  return [...new Set([...fresh, ...stale])].slice(0, cap);
+}
+
+async function loadTape(fetchFn: typeof fetch, now: number): Promise<TapeResult> {
   const warnings: string[] = [];
   const settle = async <T>(label: string, p: Promise<T>, empty: T): Promise<T> => {
     try {
@@ -181,7 +200,7 @@ async function loadTape(fetchFn: typeof fetch): Promise<TapeResult> {
     settle('Dex profiles', getJson<DexListed[]>(`${DEX}/token-profiles/latest/v1`, fetchFn), []),
     settle(
       'Gecko new pools',
-      getJson<{ data?: GeckoPool[] }>(`${GECKO}/networks/solana/new_pools`, fetchFn),
+      getJson<{ data?: GeckoPool[] }>(`${GECKO}/networks/solana/new_pools?page=1`, fetchFn),
       { data: [] },
     ),
     settle(
@@ -192,81 +211,63 @@ async function loadTape(fetchFn: typeof fetch): Promise<TapeResult> {
   ]);
 
   const listed = new Map<string, { chain: string; mint: string; sources: TapeSource[] }>();
-  const add = (items: DexListed[], source: TapeSource) => {
-    for (const it of Array.isArray(items) ? items : []) {
-      if (!it.chainId || !it.tokenAddress || !SCAN_CHAINS.has(it.chainId)) continue;
-      const k = key(it.chainId, it.tokenAddress);
-      const row = listed.get(k) || { chain: it.chainId, mint: it.tokenAddress, sources: [] };
-      if (!row.sources.includes(source)) row.sources.push(source);
-      listed.set(k, row);
-    }
+  const add = (chain: string, mint: string, source: TapeSource) => {
+    if (!SCAN_CHAINS.has(chain)) return;
+    const k = key(chain, mint);
+    const row = listed.get(k) || { chain, mint, sources: [] };
+    if (!row.sources.includes(source)) row.sources.push(source);
+    listed.set(k, row);
   };
-  add(boosts, 'dex-boost');
-  add(profiles, 'dex-profile');
-
+  for (const it of Array.isArray(boosts) ? boosts : []) {
+    if (it.chainId && it.tokenAddress) add(it.chainId, it.tokenAddress, 'dex-boost');
+  }
+  for (const it of Array.isArray(profiles) ? profiles : []) {
+    if (it.chainId && it.tokenAddress) add(it.chainId, it.tokenAddress, 'dex-profile');
+  }
   const geckoRows = new Map<string, TapeRow>();
-  const gecko: [GeckoPool[], TapeSource][] = [
-    [fresh.data || [], 'gecko-new'],
-    [trending.data || [], 'gecko-trending'],
-  ];
-  for (const [pools, source] of gecko) {
-    for (const pool of pools) {
-      const row = rowFromGeckoPool(pool, source);
-      if (!row) continue;
-      const k = key(row.chain, row.mint);
-      const prev = geckoRows.get(k);
-      if (prev) {
-        if (!prev.sources.includes(source)) prev.sources.push(source);
-      } else {
-        geckoRows.set(k, row);
-      }
-      const listedRow = listed.get(k) || { chain: row.chain, mint: row.mint, sources: [] };
-      if (!listedRow.sources.includes(source)) listedRow.sources.push(source);
-      listed.set(k, listedRow);
-    }
+  for (const pool of fresh.data || []) {
+    const row = rowFromGeckoPool(pool, 'gecko-new', now);
+    if (!row) continue;
+    const k = key(row.chain, row.mint);
+    if (!geckoRows.has(k)) geckoRows.set(k, row);
+    add(row.chain, row.mint, 'gecko-new');
+  }
+  const trendingKeys = new Set<string>();
+  for (const pool of trending.data || []) {
+    const row = rowFromGeckoPool(pool, 'gecko-trending', now);
+    if (row) trendingKeys.add(key(row.chain, row.mint));
   }
 
+  const batch = pickPairBatch([...listed.keys()], pairs, now);
   const byChain = new Map<string, string[]>();
-  for (const row of listed.values()) {
-    const list = byChain.get(row.chain) || [];
-    list.push(row.mint);
-    byChain.set(row.chain, list);
+  for (const k of batch) {
+    const it = listed.get(k)!;
+    byChain.set(it.chain, [...(byChain.get(it.chain) || []), it.mint]);
   }
-  const pairLists = await Promise.all(
-    [...byChain.entries()].flatMap(([chain, mints]) => {
-      const chunks: string[][] = [];
-      for (let i = 0; i < mints.length; i += 30) chunks.push(mints.slice(i, i + 30));
-      return chunks.map((chunk) =>
-        settle(
-          `Dex pairs ${chain}`,
-          getJson<DexPair[]>(`${DEX}/tokens/v1/${chain}/${chunk.join(',')}`, fetchFn),
-          [],
-        ),
-      );
-    }),
+  const fetched = await Promise.all(
+    [...byChain.entries()].map(([chain, mints]) =>
+      settle(`Dex pairs ${chain}`, getJson<DexPair[]>(`${DEX}/tokens/v1/${chain}/${mints.join(',')}`, fetchFn), []),
+    ),
   );
-  const pairs = bestPairs(pairLists.flat().filter(Boolean));
+  for (const [k, pair] of bestPairs(fetched.flat().filter(Boolean))) pairs.set(k, { at: now, pair });
+  for (const [k, v] of pairs) if (now - v.at > PAIR_KEEP_MS) pairs.delete(k);
 
-  const rows = new Map<string, TapeRow>();
+  const rows: TapeRow[] = [];
   for (const [k, it] of listed) {
-    const pair = pairs.get(k);
+    const sources = trendingKeys.has(k) ? [...it.sources, 'gecko-trending' as const] : it.sources;
+    const pair = pairs.get(k)?.pair;
     const fallback = geckoRows.get(k);
-    const row = pair ? rowFromDexPair(pair, it.sources) : fallback ? { ...fallback, sources: it.sources } : null;
-    if (row) rows.set(k, row);
+    const row = pair ? rowFromDexPair(pair, sources, now) : fallback ? { ...fallback, sources } : null;
+    if (row && !droppedSymbol(row.symbol)) rows.push(row);
   }
-
-  return {
-    rows: [...rows.values()].filter((r) => !droppedSymbol(r.symbol)),
-    warnings,
-    fetchedAt: Date.now(),
-  };
+  return { rows, warnings, fetchedAt: now };
 }
 
-/** Shared tape for every account, cached for 45s so refreshes don't hammer Dex / Gecko. */
+/** Shared tape for every account. The 12s TTL is shorter than the 20s client poll, so every tick is a fresh read. */
 export async function fetchTape(fetchFn: typeof fetch = fetch, now = Date.now()): Promise<TapeResult> {
   if (cache && now - cache.fetchedAt < TAPE_TTL_MS) return cache;
   if (!inflight) {
-    inflight = loadTape(fetchFn)
+    inflight = loadTape(fetchFn, now)
       .then((result) => {
         if (result.rows.length) cache = result;
         return result;

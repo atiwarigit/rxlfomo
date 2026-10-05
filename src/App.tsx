@@ -205,7 +205,6 @@ function App() {
           <ScannerTab
             handle={config.handle}
             portfolio={data}
-            walletHints={walletsFor(config.handle)}
             llmApiKey={config.llmApiKey}
             llmModel={config.llmModel}
             llmBaseUrl={config.llmBaseUrl}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Radar, RefreshCw, ShieldAlert } from 'lucide-react';
 import { ChatPanel } from './ChatPanel';
 import type { ChatTurn, ScannerChatSnapshot } from '../lib/ai/bookContext';
@@ -14,7 +14,7 @@ import {
   type CapFilter,
   type Category,
 } from '../lib/scanner/cardFormat';
-import { applyBookVetoes, bookNumbers, bookVetoes, vetoSentence } from '../lib/scanner/rules';
+import { applyBook, vetoSentence } from '../lib/scanner/rules';
 import type { PortfolioSnapshot } from '../types/portfolio';
 import type { Play, PlaysResponse } from '../types/plays';
 
@@ -24,14 +24,13 @@ const PROMPTS = [
   'What would have to change for a size card?',
 ];
 
-const MAX_CARDS = 8;
-const CLIENT_TTL_MS = 45_000;
-const lastPlays = new Map<string, { at: number; body: PlaysResponse }>();
+const MAX_CARDS = 12;
+const TAPE_MS = 20_000;
+const lastPlays = new Map<string, PlaysResponse>();
 
 interface Props {
   handle: string;
   portfolio: PortfolioSnapshot | null;
-  walletHints: { solana?: string; evm?: string };
   llmApiKey: string;
   llmModel: string;
   llmBaseUrl: string;
@@ -41,11 +40,8 @@ interface Props {
   onThread: (turns: ChatTurn[]) => void;
 }
 
-async function fetchPlays(handle: string, hints: Props['walletHints']): Promise<PlaysResponse> {
-  const params = new URLSearchParams({ handle });
-  if (hints.solana) params.set('solanaHint', hints.solana);
-  if (hints.evm) params.set('evmHint', hints.evm);
-  const res = await fetch(`/api/plays?${params.toString()}`);
+async function fetchPlays(handle: string): Promise<PlaysResponse> {
+  const res = await fetch(`/api/plays?${new URLSearchParams({ handle }).toString()}`);
   const text = await res.text();
   let body: (PlaysResponse & { message?: string }) | null = null;
   try {
@@ -105,7 +101,7 @@ function Social({ href, label }: { href?: string; label: string }) {
   );
 }
 
-function PlayCard({ play }: { play: Play }) {
+function PlayCard({ play, isNew }: { play: Play; isNew: boolean }) {
   const [copied, setCopied] = useState(false);
   const txns = (play.buys1h ?? 0) + (play.sells1h ?? 0);
   const share = txns ? Math.round(((play.buys1h ?? 0) / txns) * 100) : null;
@@ -118,6 +114,11 @@ function PlayCard({ play }: { play: Play }) {
     <article className="flex flex-col gap-2.5 rounded-2xl border border-white/10 bg-[#0d0f18] p-4">
       <div className="flex min-w-0 items-center gap-1.5">
         <h3 className="truncate font-mono text-[18px] font-[650] leading-tight">{play.symbol}</h3>
+        {isNew ? (
+          <span className="shrink-0 rounded-md bg-emerald-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200">
+            NEW
+          </span>
+        ) : null}
         <Chip>{categoryOf(play)}</Chip>
         <Chip>{cap.label}</Chip>
         <span
@@ -231,7 +232,6 @@ function FilterRow<T extends string>({
 export function ScannerTab({
   handle,
   portfolio,
-  walletHints,
   llmApiKey,
   llmModel,
   llmBaseUrl,
@@ -241,59 +241,85 @@ export function ScannerTab({
   onThread,
 }: Props) {
   const key = handle.trim().toLowerCase();
-  const [body, setBody] = useState<PlaysResponse | null>(() => lastPlays.get(key)?.body ?? null);
-  const [loading, setLoading] = useState(false);
+  const [body, setBody] = useState<PlaysResponse | null>(() => lastPlays.get(key) ?? null);
+  const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [category, setCategory] = useState<Category>('All');
   const [capFilter, setCapFilter] = useState<CapFilter>('All caps');
-
-  const load = useCallback(async () => {
-    if (!handle) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await fetchPlays(handle, walletHints);
-      lastPlays.set(key, { at: Date.now(), body: next });
-      setBody(next);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Scanner failed');
-    } finally {
-      setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handle, key, walletHints.solana, walletHints.evm]);
+  const [tickAt, setTickAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const [nonce, setNonce] = useState(0);
+  const [diff, setDiff] = useState<{ added: Set<string>; removed: number } | null>(null);
+  const handleRef = useRef(key);
+  const prevMints = useRef<Set<string> | null>(null);
 
   useEffect(() => {
-    const hit = lastPlays.get(key);
-    setBody(hit?.body ?? null);
-    if (!hit || Date.now() - hit.at > CLIENT_TTL_MS) void load();
-  }, [key, load]);
+    handleRef.current = key;
+    const cached = lastPlays.get(key) ?? null;
+    setBody(cached);
+    setDiff(null);
+    prevMints.current = cached ? new Set(cached.plays.map((p) => p.mint)) : null;
+  }, [key]);
 
-  const serverBook = body?.books.find((b) => b.handle.toLowerCase() === key);
-
-  const vetoes = useMemo(() => {
-    const onScreen = portfolio ? bookVetoes(bookNumbers(portfolio)) : [];
-    const fromRoute = serverBook?.vetoes ?? [];
-    const merged = [...onScreen];
-    for (const v of fromRoute) {
-      const kind = v.split(' ')[0];
-      if (!merged.some((m) => m.split(' ')[0] === kind)) merged.push(v);
+  const loadPlays = useCallback(async () => {
+    const forKey = key;
+    if (!handle) return;
+    setInFlight(true);
+    try {
+      const next = await fetchPlays(handle);
+      if (handleRef.current !== forKey) return;
+      const mints = new Set(next.plays.map((p) => p.mint));
+      const prev = prevMints.current;
+      if (prev) {
+        setDiff({
+          added: new Set([...mints].filter((m) => !prev.has(m))),
+          removed: [...prev].filter((m) => !mints.has(m)).length,
+        });
+      }
+      prevMints.current = mints;
+      lastPlays.set(forKey, next);
+      setBody(next);
+      setError(null);
+    } catch (err) {
+      if (handleRef.current === forKey) setError(err instanceof Error ? err.message : 'Scanner failed');
+    } finally {
+      setInFlight(false);
     }
-    return merged;
-  }, [portfolio, serverBook]);
+  }, [handle, key]);
 
-  const plays = useMemo(
-    () =>
-      applyBookVetoes(
-        (body?.plays ?? []).filter(
-          (p, i, all) =>
-            p.account.toLowerCase() === key && all.findIndex((q) => q.mint === p.mint) === i,
-        ),
-        vetoes,
-        serverBook?.vetoes,
-      ),
-    [body, key, vetoes, serverBook],
-  );
+  useEffect(() => {
+    let stopped = false;
+    let busy = false;
+    async function tick() {
+      if (stopped || busy) return;
+      busy = true;
+      setTickAt(Date.now());
+      try {
+        await loadPlays();
+      } finally {
+        busy = false;
+      }
+    }
+    void tick();
+    const id = setInterval(() => void tick(), TAPE_MS);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handle, nonce]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const { book, plays } = useMemo(() => {
+    const runners = (body?.plays ?? []).filter((p, i, all) => all.findIndex((q) => q.mint === p.mint) === i);
+    return applyBook(handle, portfolio, runners);
+  }, [body, handle, portfolio]);
+  const vetoes = book.vetoes;
+
   const shown = useMemo(
     () => plays.filter((p) => matchesFilters(p, category, capFilter)),
     [plays, category, capFilter],
@@ -310,15 +336,12 @@ export function ScannerTab({
   }, [plays, category]);
   const sizeN = vetoes.length ? 0 : plays.filter((p) => p.decision === 'size').length;
   const watchN = plays.length - sizeN;
+  const secs = Math.max(0, Math.floor((now - tickAt) / 1000));
+  const unchanged = diff != null && diff.added.size === 0 && diff.removed === 0;
 
   const chatSnapshot = useMemo<ScannerChatSnapshot>(
-    () => ({
-      book: portfolio,
-      plays,
-      books: serverBook ? [{ ...serverBook, vetoes }] : [],
-      tapeCount: body?.tapeCount,
-    }),
-    [portfolio, plays, serverBook, vetoes, body],
+    () => ({ book: portfolio, plays, books: [book], tapeCount: body?.tapeCount }),
+    [portfolio, plays, book, body],
   );
 
   return (
@@ -332,35 +355,41 @@ export function ScannerTab({
             </span>
           </div>
           <span className="font-mono text-xs text-white/70">
-            tape <span className="text-white">{body?.tapeCount ?? '—'}</span>
+            rows <span className="text-white">{body?.tapeCount ?? '—'}</span>
           </span>
           <span className="font-mono text-xs text-amber-300">watch {watchN}</span>
           <span className="font-mono text-xs text-emerald-300">size {sizeN}</span>
-          {body ? (
-            <span className="text-[10px] text-white/35">
-              {new Date(body.generatedAt).toLocaleTimeString()}
-            </span>
-          ) : null}
           <button
             type="button"
-            onClick={() => void load()}
-            disabled={loading || !handle}
+            onClick={() => setNonce((n) => n + 1)}
+            disabled={!handle}
             className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-xs hover:bg-white/5 disabled:opacity-50"
           >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            <RefreshCw size={13} className={inFlight ? 'animate-spin' : ''} />
             Refresh tape
           </button>
         </div>
-        {vetoes.length ? (
-          <p className="mt-2 flex items-start gap-1.5 border-t border-white/10 pt-2 text-xs text-rose-200/90">
-            <ShieldAlert size={12} className="mt-0.5 shrink-0 text-rose-300" />
-            {vetoSentence(vetoes)}
-          </p>
-        ) : body ? (
-          <p className="mt-2 border-t border-white/10 pt-2 text-xs text-white/40">
-            No book veto — a size card carries a cap, not an order.
-          </p>
-        ) : null}
+        <div className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1 border-t border-white/10 pt-2">
+          <span className="shrink-0 font-mono text-xs text-white/60" aria-live="polite">
+            tape {secs}s
+            {unchanged ? (
+              <span className="text-amber-300"> · tape unchanged</span>
+            ) : diff ? (
+              <span className="text-white/40">
+                {' '}
+                · +{diff.added.size} new · −{diff.removed} gone
+              </span>
+            ) : null}
+          </span>
+          {vetoes.length ? (
+            <p className="flex min-w-0 flex-1 items-start gap-1.5 text-xs text-rose-200/90">
+              <ShieldAlert size={12} className="mt-0.5 shrink-0 text-rose-300" />
+              {vetoSentence(vetoes)}
+            </p>
+          ) : (
+            <p className="flex-1 text-xs text-white/40">No book veto — a size card carries a cap, not an order.</p>
+          )}
+        </div>
         {body ? (
           <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
             <FilterRow<Category>
@@ -381,20 +410,20 @@ export function ScannerTab({
         </div>
       ) : null}
 
-      {!body && loading ? (
-        <p className="py-10 text-center text-sm text-white/40">Reading the tape against @{handle}'s book…</p>
-      ) : body && !plays.length ? (
+      {!body ? (
+        <p className="py-10 text-center text-sm text-white/40">Reading the live tape…</p>
+      ) : !plays.length ? (
         <p className="rounded-2xl border border-white/10 bg-[#0b0f19] py-10 text-center text-sm text-white/45">
           No pool under 48h scores 30+ as a runner above this book's liquidity floor right now.
         </p>
-      ) : body && !shown.length ? (
+      ) : !shown.length ? (
         <p className="rounded-2xl border border-white/10 bg-[#0b0f19] py-10 text-center text-sm text-white/45">
           No card matches {category} · {capFilter}.
         </p>
       ) : (
         <section className="grid items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {shown.slice(0, MAX_CARDS).map((p) => (
-            <PlayCard key={`${p.chain}:${p.mint}`} play={p} />
+            <PlayCard key={`${p.chain}:${p.mint}`} play={p} isNew={Boolean(diff?.added.has(p.mint))} />
           ))}
         </section>
       )}

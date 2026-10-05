@@ -1,18 +1,14 @@
-import { loadPortfolio } from '../src/lib/portfolio/load.ts';
-import { RULES, buildPlays } from '../src/lib/scanner/rules.ts';
+import { RULES, buildRunners } from '../src/lib/scanner/rules.ts';
 import { fetchTape } from '../src/lib/scanner/tape.ts';
-import type { PortfolioSnapshot } from '../src/types/portfolio.ts';
 import type { PlaysResponse } from '../src/types/plays.ts';
-import { knownWallets, sameHandle } from './knownWallets.ts';
 
 export const config = {
-  maxDuration: 60,
+  maxDuration: 30,
 };
 
 type Query = Record<string, string | string[] | undefined>;
 
-const BOOK_TTL_MS = 90_000;
-const books = new Map<string, { at: number; snap: PortfolioSnapshot }>();
+const lastBoard = new Map<string, Set<string>>();
 
 function first(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] || '';
@@ -38,27 +34,10 @@ function json(
   res.status(status).json(body);
 }
 
-/** Same loader as /api/portfolio, but without a FOMO key: the scanner never spends fomoapi credits. */
-async function readBook(
-  handle: string,
-  wallets: { solana: string; evm: string },
-  env: Record<string, string | undefined>,
-): Promise<PortfolioSnapshot> {
-  const k = `${handle.toLowerCase()}|${wallets.solana}|${wallets.evm}`;
-  const hit = books.get(k);
-  if (hit && Date.now() - hit.at < BOOK_TTL_MS) return hit.snap;
-  const snap = await loadPortfolio({
-    handle,
-    apiKey: '',
-    solanaWallet: wallets.solana,
-    evmWallet: wallets.evm,
-    solanaRpcUrl: env.SOLANA_RPC_URL,
-    heliusApiKey: env.HELIUS_API_KEY,
-  });
-  if (snap.source.onchain) books.set(k, { at: Date.now(), snap });
-  return snap;
-}
-
+/**
+ * Live runner board for one handle, rebuilt from the tape on every call (tape TTL 12s).
+ * Never loads the portfolio: book vetoes, held mints and fit come from the snapshot on the page.
+ */
 export default async function handler(
   req: { method?: string; query?: Query; headers?: Query; url?: string },
   res: {
@@ -82,23 +61,15 @@ export default async function handler(
       json(res, 400, { error: 'config', message: 'GET /api/plays?handle=<fomo handle>' });
       return;
     }
-    const envWallets = sameHandle(handle, defaultHandle)
-      ? { solana: env.SOLANA_WALLET || '', evm: env.EVM_WALLET || '' }
-      : { solana: '', evm: '' };
-    const known = knownWallets(handle);
-    const wallets = {
-      solana:
-        queryValue(req, 'solana') || envWallets.solana || known.solana || queryValue(req, 'solanaHint'),
-      evm: queryValue(req, 'evm') || envWallets.evm || known.evm || queryValue(req, 'evmHint'),
-    };
-
-    const [snap, tape] = await Promise.all([readBook(handle, wallets, env), fetchTape()]);
-    const { book, plays } = buildPlays({ handle, book: snap, tape: tape.rows });
+    const k = handle.toLowerCase();
+    const tape = await fetchTape();
+    const plays = buildRunners({ handle, tape: tape.rows, previous: lastBoard.get(k) });
+    lastBoard.set(k, new Set(plays.map((p) => (p.mint.startsWith('0x') ? p.mint.toLowerCase() : p.mint))));
     const body: PlaysResponse = {
-      generatedAt: new Date().toISOString(),
+      generatedAt: new Date(tape.fetchedAt).toISOString(),
       tapeCount: tape.rows.length,
       rules: RULES,
-      books: [book],
+      books: [],
       plays,
     };
     json(res, 200, body);

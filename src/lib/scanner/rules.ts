@@ -244,22 +244,19 @@ function dedupe(plays: Play[]): Play[] {
   return out;
 }
 
-export function buildPlays(input: {
-  handle: string;
-  book: PortfolioSnapshot;
-  tape: TapeRow[];
-  limit?: number;
-}): { book: PlayBook; plays: Play[] } {
-  const book = bookFromSnapshot(input.handle, input.book);
-  const floors = floorsFor(input.handle, book.equity);
-  const profile = bookProfile(input.book);
-  const cashAboveFloor = input.book.summary.cashUsd - (book.equity * RULES.minCashPct) / 100;
-  const nameCap = (book.equity * RULES.maxNamePct) / 100;
-  const plays: Play[] = [];
+export const MAX_BOARD = 12;
 
+/** Book-free runner board from the live tape: newest pool first, then runner score. */
+export function buildRunners(input: {
+  handle: string;
+  tape: TapeRow[];
+  previous?: Set<string>;
+  limit?: number;
+}): Play[] {
+  const floors = floorsFor(input.handle, 0);
+  const plays: Play[] = [];
   for (const row of input.tape) {
     if (!SCAN_CHAINS.has(row.chain) || droppedSymbol(row.symbol)) continue;
-    if (profile.held.has(mintKey(row.mint))) continue;
     if (row.liquidityUsd < floors.minLiq) continue;
     if (row.ageHours == null || row.ageHours > MAX_RUNNER_AGE_HOURS) continue;
 
@@ -273,24 +270,6 @@ export function buildPlays(input: {
     const themes = narrativesFor({ symbol: row.symbol, name: row.name, quote: row.quoteSymbol }).filter(
       (t) => t !== 'Other',
     );
-    const padRow = launchpad ? profile.launchpads.get(launchpad) : undefined;
-    const fitTheme = themes.find((t) => paid(profile.themes.get(t)));
-    const fitsPad = paid(padRow);
-    const bookFit = fitsPad || fitTheme ? 'fits' : 'new';
-    const bookEdge = fitsPad ? `Fits ${launchpad}` : fitTheme ? `Fits ${themeWord(fitTheme)}` : 'New to this book';
-
-    const cardVetoes: string[] = [];
-    if (row.liquidityUsd < floors.sizeFloorLiq) {
-      cardVetoes.push(`liquidity ${usd(row.liquidityUsd)} under the ${usd(floors.sizeFloorLiq)} size floor`);
-    }
-    if (bookFit === 'new') cardVetoes.push('no realized win or drip on this launchpad or theme yet');
-    const rawCap = Math.floor(Math.min(nameCap, cashAboveFloor));
-    if (!book.vetoes.length && !cardVetoes.length && rawCap <= 0) {
-      cardVetoes.push(`no cash above the ${RULES.minCashPct}% floor`);
-    }
-    const vetoes = [...book.vetoes, ...cardVetoes];
-    const decision = vetoes.length ? 'watch' : 'size';
-    const sizeCapUsd = decision === 'size' ? rawCap : 0;
     const buys = row.buys1h ?? 0;
     const txns = buys + (row.sells1h ?? 0);
     const chg = row.change1hPct;
@@ -303,12 +282,12 @@ export function buildPlays(input: {
       launchpad: launchpad || 'Unknown',
       themes,
       trigger: row.sources.map((x) => SOURCE_LABEL[x]).join(' + ') || 'tape',
-      bookEdge,
-      bookFit,
-      sizeCapUsd,
-      vetoes,
-      decision,
-      lastCall: decision === 'size' ? `SIZE_UP_TO_${sizeCapUsd}` : `WATCH_${label.toUpperCase()}`,
+      bookEdge: 'New to this book',
+      bookFit: 'new',
+      sizeCapUsd: 0,
+      vetoes: [],
+      decision: 'watch',
+      lastCall: `WATCH_${label.toUpperCase()}`,
       reason: `Launched ${ageText(row.ageHours)} ago, ${chg == null ? '1h n/a' : `${chg >= 0 ? '+' : ''}${chg.toFixed(0)}% in 1h`}, ${txns ? `${Math.round((buys / txns) * 100)}% buys over ${txns} txns` : 'no 1h txns'}, ${usd(row.liquidityUsd)} liquidity.`,
       score,
       runnerScore: score,
@@ -329,22 +308,82 @@ export function buildPlays(input: {
       twitter: row.twitter,
       telegram: row.telegram,
       sources: row.sources,
+      arrived: input.previous ? !input.previous.has(mintKey(row.mint)) : false,
     });
   }
 
   plays.sort((a, b) => b.runnerScore - a.runnerScore || b.liquidityUsd - a.liquidityUsd);
-  return { book, plays: dedupe(plays).slice(0, input.limit ?? 24) };
+  const trending = (p: Play) => (p.sources.includes('gecko-trending') ? 1 : 0);
+  return dedupe(plays)
+    .sort(
+      (a, b) =>
+        (a.ageHours ?? Infinity) - (b.ageHours ?? Infinity) ||
+        b.runnerScore - a.runnerScore ||
+        trending(b) - trending(a),
+    )
+    .slice(0, input.limit ?? MAX_BOARD);
 }
 
-/** Re-apply book vetoes computed from the book on screen (it carries the browser's peak). */
-export function applyBookVetoes(plays: Play[], vetoes: string[], routeVetoes: string[] = []): Play[] {
-  if (!vetoes.length) return plays;
-  const drop = new Set([...vetoes, ...routeVetoes]);
-  return plays.map((p) => ({
-    ...p,
-    vetoes: [...vetoes, ...p.vetoes.filter((v) => !drop.has(v))],
-    decision: 'watch',
-    sizeCapUsd: 0,
-    lastCall: `WATCH_${p.runnerLabel.toUpperCase()}`,
-  }));
+/** Book pass on the page: drop held mints, word the fit, and set watch/size from the snapshot on screen. */
+export function applyBook(
+  handle: string,
+  snap: PortfolioSnapshot | null,
+  runners: Play[],
+): { book: PlayBook; plays: Play[] } {
+  const book: PlayBook = snap
+    ? bookFromSnapshot(handle, snap)
+    : {
+        handle,
+        equity: 0,
+        cashPct: 0,
+        drawdownPct: 0,
+        vetoes: ['book not loaded yet'],
+        sizeFloorLiq: floorsFor(handle, 0).sizeFloorLiq,
+      };
+  const floors = floorsFor(handle, book.equity);
+  const profile = snap ? bookProfile(snap) : { launchpads: new Map(), themes: new Map(), held: new Set<string>() };
+  const cashAboveFloor = snap ? snap.summary.cashUsd - (book.equity * RULES.minCashPct) / 100 : 0;
+  const nameCap = (book.equity * RULES.maxNamePct) / 100;
+
+  const plays = runners
+    .filter((p) => !profile.held.has(mintKey(p.mint)))
+    .map((p): Play => {
+      const padRow = p.launchpad !== 'Unknown' ? profile.launchpads.get(p.launchpad) : undefined;
+      const fitTheme = p.themes.find((t) => paid(profile.themes.get(t)));
+      const fitsPad = paid(padRow);
+      const bookFit = fitsPad || fitTheme ? 'fits' : 'new';
+      const bookEdge = fitsPad ? `Fits ${p.launchpad}` : fitTheme ? `Fits ${themeWord(fitTheme)}` : 'New to this book';
+      const cardVetoes: string[] = [];
+      if (p.liquidityUsd < floors.sizeFloorLiq) {
+        cardVetoes.push(`liquidity ${usd(p.liquidityUsd)} under the ${usd(floors.sizeFloorLiq)} size floor`);
+      }
+      if (bookFit === 'new') cardVetoes.push('no realized win or drip on this launchpad or theme yet');
+      const rawCap = Math.floor(Math.min(nameCap, cashAboveFloor));
+      if (!book.vetoes.length && !cardVetoes.length && rawCap <= 0) {
+        cardVetoes.push(`no cash above the ${RULES.minCashPct}% floor`);
+      }
+      const vetoes = [...book.vetoes, ...cardVetoes];
+      const decision = vetoes.length ? 'watch' : 'size';
+      const sizeCapUsd = decision === 'size' ? rawCap : 0;
+      return {
+        ...p,
+        account: handle,
+        bookEdge,
+        bookFit,
+        vetoes,
+        decision,
+        sizeCapUsd,
+        lastCall: decision === 'size' ? `SIZE_UP_TO_${sizeCapUsd}` : `WATCH_${p.runnerLabel.toUpperCase()}`,
+      };
+    });
+  return { book, plays };
+}
+
+export function buildPlays(input: {
+  handle: string;
+  book: PortfolioSnapshot;
+  tape: TapeRow[];
+  limit?: number;
+}): { book: PlayBook; plays: Play[] } {
+  return applyBook(input.handle, input.book, buildRunners({ handle: input.handle, tape: input.tape, limit: input.limit }));
 }
