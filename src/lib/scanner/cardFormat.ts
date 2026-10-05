@@ -38,10 +38,8 @@ export function ageLabel(hours?: number | null) {
 
 /** From the theme field; a "Fits <theme>" book word still yields its chip when themes are empty. */
 export function categoryOf(play: Pick<Play, 'themes' | 'bookEdge'>): Exclude<Category, 'All'> {
-  const fromThemes = play.themes.map((t) => THEME_TO_CATEGORY[t.toLowerCase()]).filter(Boolean);
-  for (const c of CATEGORIES) {
-    if (c !== 'All' && c !== 'Other' && fromThemes.includes(c)) return c;
-  }
+  const fromTheme = play.themes.map((t) => THEME_TO_CATEGORY[t.toLowerCase()]).find(Boolean);
+  if (fromTheme && fromTheme !== 'All') return fromTheme;
   const fit = /^Fits (.+)$/i.exec(play.bookEdge || '')?.[1]?.toLowerCase();
   const fromFit = fit ? THEME_TO_CATEGORY[fit] : undefined;
   return fromFit && fromFit !== 'All' ? fromFit : 'Other';

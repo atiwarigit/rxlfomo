@@ -6,6 +6,7 @@ describe('card chips', () => {
     expect(categoryOf({ themes: ['Animals'], bookEdge: 'Fits animals' })).toBe('Animals');
     expect(categoryOf({ themes: ['AI / agents'], bookEdge: 'New to this book' })).toBe('AI');
     expect(categoryOf({ themes: ['CT figures'], bookEdge: '' })).toBe('CT');
+    expect(categoryOf({ themes: ['AI / agents', 'Animals'], bookEdge: 'Fits AI / agents' })).toBe('AI');
     expect(categoryOf({ themes: [], bookEdge: 'New to this book' })).toBe('Other');
     expect(categoryOf({ themes: ['NEAR'], bookEdge: '' })).toBe('Other');
     expect(categoryOf({ themes: [], bookEdge: 'Fits animals' })).toBe('Animals');
