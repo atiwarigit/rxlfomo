@@ -1859,6 +1859,10 @@ function runnerScore(input) {
   const wash = turnover < 8 ? 10 : turnover > 20 ? 0 : 5;
   return fresh + early + buyers + exit + wash;
 }
+function isExtended(row) {
+  const turnover = row.liquidityUsd > 0 ? row.volume1hUsd / row.liquidityUsd : Infinity;
+  return turnover > 8 || (row.change1hPct ?? 0) > 80;
+}
 function runnerLabel(score) {
   if (score >= 75) return "early";
   if (score >= 50) return "building";
@@ -1911,8 +1915,10 @@ function buildPlays(input) {
     if (profile.held.has(mintKey(row.mint))) continue;
     if (row.liquidityUsd < floors.minLiq) continue;
     if (row.ageHours == null || row.ageHours > MAX_RUNNER_AGE_HOURS) continue;
-    const score = runnerScore({ ...row, floors });
-    const label = runnerLabel(score);
+    const rawScore = runnerScore({ ...row, floors });
+    const extended = isExtended(row);
+    const score = extended ? Math.min(rawScore, 49) : rawScore;
+    const label = extended && score >= MIN_RUNNER_SCORE ? "chase" : runnerLabel(score);
     if (!label) continue;
     const launchpad = scannerLaunchpad(row.dexId, row.mint);
     const themes = narrativesFor({ symbol: row.symbol, name: row.name, quote: row.quoteSymbol }).filter(
@@ -1968,11 +1974,14 @@ function buildPlays(input) {
       sells1h: row.sells1h,
       ageHours: row.ageHours,
       pairUrl: row.pairUrl,
+      website: row.website,
+      twitter: row.twitter,
+      telegram: row.telegram,
       sources: row.sources
     });
   }
   plays.sort((a, b) => b.runnerScore - a.runnerScore || b.liquidityUsd - a.liquidityUsd);
-  return { book, plays: dedupe(plays).slice(0, input.limit ?? 12) };
+  return { book, plays: dedupe(plays).slice(0, input.limit ?? 24) };
 }
 
 // src/lib/scanner/tape.ts
@@ -2005,6 +2014,9 @@ function positiveOrNull(v) {
   const n = numOrNull(v);
   return n != null && n > 0 ? n : null;
 }
+function social(pair, type) {
+  return pair.info?.socials?.find((x) => x.type?.toLowerCase() === type && x.url)?.url;
+}
 function rowFromDexPair(pair, sources, now = Date.now()) {
   const mint = pair.baseToken?.address;
   const chain = pair.chainId || "";
@@ -2028,6 +2040,9 @@ function rowFromDexPair(pair, sources, now = Date.now()) {
     sells1h: numOrNull(pair.txns?.h1?.sells),
     ageHours: pair.pairCreatedAt ? Math.max(0, (now - pair.pairCreatedAt) / 36e5) : null,
     pairUrl: pair.url || `https://dexscreener.com/${chain}/${mint}`,
+    website: pair.info?.websites?.find((w) => w.url)?.url,
+    twitter: social(pair, "twitter"),
+    telegram: social(pair, "telegram"),
     sources: [...sources]
   };
 }

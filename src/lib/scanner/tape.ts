@@ -66,6 +66,10 @@ interface DexPair {
   marketCap?: number | null;
   fdv?: number | null;
   pairCreatedAt?: number;
+  info?: {
+    websites?: { url?: string }[];
+    socials?: { type?: string; url?: string }[];
+  };
 }
 
 interface GeckoPool {
@@ -84,6 +88,10 @@ interface GeckoPool {
     base_token?: { data?: { id?: string } };
     dex?: { data?: { id?: string } };
   };
+}
+
+function social(pair: DexPair, type: string): string | undefined {
+  return pair.info?.socials?.find((x) => x.type?.toLowerCase() === type && x.url)?.url;
 }
 
 export function rowFromDexPair(pair: DexPair, sources: TapeSource[], now = Date.now()): TapeRow | null {
@@ -109,6 +117,9 @@ export function rowFromDexPair(pair: DexPair, sources: TapeSource[], now = Date.
     sells1h: numOrNull(pair.txns?.h1?.sells),
     ageHours: pair.pairCreatedAt ? Math.max(0, (now - pair.pairCreatedAt) / 3_600_000) : null,
     pairUrl: pair.url || `https://dexscreener.com/${chain}/${mint}`,
+    website: pair.info?.websites?.find((w) => w.url)?.url,
+    twitter: social(pair, 'twitter'),
+    telegram: social(pair, 'telegram'),
     sources: [...sources],
   };
 }

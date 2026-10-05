@@ -153,6 +153,20 @@ describe('runnerScore', () => {
 });
 
 describe('buildPlays', () => {
+  it('labels a washed pool CHASE capped at 49 even when it is fresh (HUMAN: $447k vol on $29k liq)', () => {
+    const { plays } = buildPlays({
+      handle: 'BusyMereDog',
+      book: book(),
+      tape: [
+        tape({ mint: 'Hum1pump', symbol: 'HUMAN', liquidityUsd: 29_000, volume1hUsd: 447_000, ageHours: 0.7 }),
+        tape({ mint: 'Pop1pump', symbol: 'POP', change1hPct: 120 }),
+      ],
+    });
+    expect(plays.find((p) => p.symbol === 'HUMAN')).toMatchObject({ runnerLabel: 'chase', runnerScore: 49 });
+    expect(plays.find((p) => p.symbol === 'POP')).toMatchObject({ runnerLabel: 'chase' });
+    expect(plays.every((p) => p.runnerScore <= 49)).toBe(true);
+  });
+
   it('drops names older than 48h, so a 53-day +98% trend is gone', () => {
     const { plays } = buildPlays({
       handle: 'BusyMereDog',
@@ -282,6 +296,13 @@ describe('tape rows', () => {
         marketCap: 30_000,
         fdv: 90_000,
         pairCreatedAt: 3_600_000,
+        info: {
+          websites: [{ url: 'https://mia.fun' }],
+          socials: [
+            { type: 'twitter', url: 'https://x.com/mia' },
+            { type: 'telegram', url: 'https://t.me/mia' },
+          ],
+        },
       },
       ['dex-boost'],
       7_200_000,
@@ -298,6 +319,9 @@ describe('tape rows', () => {
       buys1h: 84,
       sells1h: 40,
       ageHours: 1,
+      website: 'https://mia.fun',
+      twitter: 'https://x.com/mia',
+      telegram: 'https://t.me/mia',
     });
     const noCap = rowFromDexPair({ chainId: 'solana', baseToken: { address: 'Z' }, fdv: 5_000 }, []);
     expect(noCap?.marketCapUsd).toBeNull();

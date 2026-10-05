@@ -2,7 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Radar, RefreshCw, ShieldAlert } from 'lucide-react';
 import { ChatPanel } from './ChatPanel';
 import type { ChatTurn, ScannerChatSnapshot } from '../lib/ai/bookContext';
-import { cn, formatPct, formatUsd } from '../lib/format';
+import { cn, formatPct } from '../lib/format';
+import {
+  CAPS,
+  CATEGORIES,
+  ageLabel,
+  capBand,
+  categoryOf,
+  matchesFilters,
+  money,
+  type CapFilter,
+  type Category,
+} from '../lib/scanner/cardFormat';
 import { applyBookVetoes, bookNumbers, bookVetoes, vetoSentence } from '../lib/scanner/rules';
 import type { PortfolioSnapshot } from '../types/portfolio';
 import type { Play, PlaysResponse } from '../types/plays';
@@ -46,21 +57,6 @@ async function fetchPlays(handle: string, hints: Props['walletHints']): Promise<
   return body;
 }
 
-function formatAge(hours: number | null): string {
-  if (hours == null || !Number.isFinite(hours)) return 'launch time missing';
-  if (hours < 1) return `launched ${Math.max(1, Math.round(hours * 60))}m ago`;
-  if (hours < 48) return `launched ${hours.toFixed(0)}h ago`;
-  return `launched ${Math.round(hours / 24)}d ago`;
-}
-
-function capLine(play: Play): string {
-  if (play.marketCapUsd == null) return 'mcap missing';
-  const mcap = `${formatUsd(play.marketCapUsd, true)} mcap`;
-  return play.fdvUsd != null && play.fdvUsd > play.marketCapUsd * 2
-    ? `${mcap} · ${formatUsd(play.fdvUsd, true)} FDV`
-    : mcap;
-}
-
 function oneHourTone(v: number | null): string {
   if (v == null) return 'text-white/50';
   if (v < 0) return 'text-rose-400';
@@ -77,43 +73,63 @@ const LABEL_TONE: Record<Play['runnerLabel'], string> = {
 
 function Figure({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/30 px-2 py-1">
-      <p className="text-[9px] uppercase tracking-[0.16em] text-white/40">{label}</p>
-      <p className={cn('font-mono text-sm', tone)}>{value}</p>
+    <div className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-white/40">{label}</p>
+      <p className={cn('font-mono text-[16px] leading-tight', tone)}>{value}</p>
     </div>
   );
 }
 
+function Chip({ children }: { children: string }) {
+  return (
+    <span className="shrink-0 rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-[11px] text-white/75">
+      {children}
+    </span>
+  );
+}
+
+function Social({ href, label }: { href?: string; label: string }) {
+  const box =
+    'inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/15 font-mono text-[11px]';
+  if (!href) {
+    return (
+      <span className={cn(box, 'opacity-30')} aria-label={`${label} missing`}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className={cn(box, 'hover:bg-white/10')} aria-label={label}>
+      {label}
+    </a>
+  );
+}
+
 function PlayCard({ play }: { play: Play }) {
+  const [copied, setCopied] = useState(false);
   const txns = (play.buys1h ?? 0) + (play.sells1h ?? 0);
   const share = txns ? Math.round(((play.buys1h ?? 0) / txns) * 100) : null;
-  const meta = [
-    capLine(play),
-    formatAge(play.ageHours),
-    play.launchpad !== 'Unknown' ? play.launchpad : null,
-    play.themes[0]?.split(' / ')[0] ?? null,
-  ].filter(Boolean);
   const m5 = play.change5mPct;
+  const cap = capBand(play.marketCapUsd);
+  const meta = [ageLabel(play.ageHours), play.launchpad !== 'Unknown' ? play.launchpad : null]
+    .filter(Boolean)
+    .join(' · ');
   return (
-    <article className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-[#0d0f18] p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="truncate font-mono text-base font-semibold">{play.symbol}</h3>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {play.decision === 'size' ? (
-            <span className="font-mono text-[10px] text-emerald-300">size ≤ {formatUsd(play.sizeCapUsd, true)}</span>
-          ) : null}
-          <span
-            className={cn(
-              'rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider',
-              LABEL_TONE[play.runnerLabel],
-            )}
-          >
-            {play.runnerLabel} {play.runnerScore}
-          </span>
-        </div>
+    <article className="flex flex-col gap-2.5 rounded-2xl border border-white/10 bg-[#0d0f18] p-4">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <h3 className="truncate font-mono text-[18px] font-[650] leading-tight">{play.symbol}</h3>
+        <Chip>{categoryOf(play)}</Chip>
+        <Chip>{cap.label}</Chip>
+        <span
+          className={cn(
+            'ml-auto shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider',
+            LABEL_TONE[play.runnerLabel],
+          )}
+        >
+          {play.runnerLabel} {play.runnerScore}
+        </span>
       </div>
-
-      <p className="text-[11px] text-white/55">{meta.join(' · ')}</p>
+      <p className="-mt-1 text-[13px] text-white/50">{meta}</p>
 
       <div className="grid grid-cols-3 gap-1.5">
         <Figure
@@ -133,24 +149,82 @@ function PlayCard({ play }: { play: Play }) {
         />
       </div>
 
-      <p className="font-mono text-[11px] text-white/70">
-        Liq {formatUsd(play.liquidityUsd, true)} · 1h vol {formatUsd(play.volume1hUsd, true)}
+      <p className="font-mono text-[12px] text-white/70">
+        Liq {money(play.liquidityUsd)} · 1h vol {money(play.volume1hUsd)}
         {txns ? <span className="text-white/35"> · {txns} txns</span> : null}
       </p>
 
-      <p className={cn('text-[11px]', play.bookFit === 'fits' ? 'text-sky-200/80' : 'text-white/40')}>
+      <p className={cn('text-[12px]', play.bookFit === 'fits' ? 'text-sky-200/80' : 'text-white/40')}>
         {play.bookEdge}
+        {play.decision === 'size' ? (
+          <span className="text-emerald-300"> · size ≤ {money(play.sizeCapUsd)}</span>
+        ) : null}
       </p>
 
-      <a
-        href={play.pairUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-auto inline-flex items-center gap-1 text-[11px] text-white/50 hover:text-white"
-      >
-        Pair <ExternalLink size={11} />
-      </a>
+      <div className="mt-auto flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          title={copied ? 'Copied' : `Copy ${play.mint}`}
+          className="rounded-lg border border-white/15 px-2 py-1 font-mono text-[13px] hover:bg-white/10"
+          onClick={() => {
+            void navigator.clipboard?.writeText(play.mint).then(() => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1200);
+            });
+          }}
+        >
+          {copied ? 'copied' : `${play.mint.slice(0, 4)}…${play.mint.slice(-4)}`}
+        </button>
+        <Social href={play.website} label="web" />
+        <Social href={play.twitter} label="X" />
+        <Social href={play.telegram} label="tg" />
+        <a
+          href={play.pairUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="ml-auto inline-flex items-center gap-1 text-[11px] text-white/50 hover:text-white"
+        >
+          Pair <ExternalLink size={11} />
+        </a>
+      </div>
     </article>
+  );
+}
+
+function FilterRow<T extends string>({
+  options,
+  value,
+  counts,
+  onChange,
+  label,
+}: {
+  options: readonly T[];
+  value: T;
+  counts: Record<string, number>;
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap items-center gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          role="radio"
+          aria-checked={value === o}
+          onClick={() => onChange(o)}
+          className={cn(
+            'rounded-full border px-2.5 py-0.5 text-[11px]',
+            value === o
+              ? 'border-amber-300/60 bg-amber-300/10 text-amber-200'
+              : 'border-white/10 text-white/55 hover:bg-white/5 hover:text-white',
+          )}
+        >
+          {o}
+          <span className="ml-1 font-mono text-white/35">{counts[o] ?? 0}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -170,6 +244,8 @@ export function ScannerTab({
   const [body, setBody] = useState<PlaysResponse | null>(() => lastPlays.get(key)?.body ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [category, setCategory] = useState<Category>('All');
+  const [capFilter, setCapFilter] = useState<CapFilter>('All caps');
 
   const load = useCallback(async () => {
     if (!handle) return;
@@ -218,6 +294,20 @@ export function ScannerTab({
       ),
     [body, key, vetoes, serverBook],
   );
+  const shown = useMemo(
+    () => plays.filter((p) => matchesFilters(p, category, capFilter)),
+    [plays, category, capFilter],
+  );
+  const categoryCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const c of CATEGORIES) out[c] = plays.filter((p) => matchesFilters(p, c, capFilter)).length;
+    return out;
+  }, [plays, capFilter]);
+  const capCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const c of CAPS) out[c] = plays.filter((p) => matchesFilters(p, category, c)).length;
+    return out;
+  }, [plays, category]);
   const sizeN = vetoes.length ? 0 : plays.filter((p) => p.decision === 'size').length;
   const watchN = plays.length - sizeN;
 
@@ -271,6 +361,18 @@ export function ScannerTab({
             No book veto — a size card carries a cap, not an order.
           </p>
         ) : null}
+        {body ? (
+          <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
+            <FilterRow<Category>
+              label="Category"
+              options={CATEGORIES}
+              value={category}
+              counts={categoryCounts}
+              onChange={setCategory}
+            />
+            <FilterRow<CapFilter> label="Market cap" options={CAPS} value={capFilter} counts={capCounts} onChange={setCapFilter} />
+          </div>
+        ) : null}
       </section>
 
       {error ? (
@@ -285,9 +387,13 @@ export function ScannerTab({
         <p className="rounded-2xl border border-white/10 bg-[#0b0f19] py-10 text-center text-sm text-white/45">
           No pool under 48h scores 30+ as a runner above this book's liquidity floor right now.
         </p>
+      ) : body && !shown.length ? (
+        <p className="rounded-2xl border border-white/10 bg-[#0b0f19] py-10 text-center text-sm text-white/45">
+          No card matches {category} · {capFilter}.
+        </p>
       ) : (
         <section className="grid items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {plays.slice(0, MAX_CARDS).map((p) => (
+          {shown.slice(0, MAX_CARDS).map((p) => (
             <PlayCard key={`${p.chain}:${p.mint}`} play={p} />
           ))}
         </section>

@@ -23,6 +23,9 @@ export interface TapeRow {
   sells1h: number | null;
   ageHours: number | null;
   pairUrl: string;
+  website?: string;
+  twitter?: string;
+  telegram?: string;
   sources: TapeSource[];
 }
 
@@ -72,6 +75,9 @@ export interface Play {
   runnerScore: number;
   runnerLabel: RunnerLabel;
   pairUrl: string;
+  website?: string;
+  twitter?: string;
+  telegram?: string;
   sources: TapeSource[];
 }
 

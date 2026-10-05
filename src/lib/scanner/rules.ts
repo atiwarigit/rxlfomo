@@ -192,6 +192,12 @@ export function runnerScore(input: {
   return fresh + early + buyers + exit + wash;
 }
 
+/** Washed (1h volume > 8x liquidity) or already up 80%+ in 1h: never early, whatever the score. */
+export function isExtended(row: { volume1hUsd: number; liquidityUsd: number; change1hPct: number | null }): boolean {
+  const turnover = row.liquidityUsd > 0 ? row.volume1hUsd / row.liquidityUsd : Infinity;
+  return turnover > 8 || (row.change1hPct ?? 0) > 80;
+}
+
 export function runnerLabel(score: number): RunnerLabel | null {
   if (score >= 75) return 'early';
   if (score >= 50) return 'building';
@@ -257,8 +263,10 @@ export function buildPlays(input: {
     if (row.liquidityUsd < floors.minLiq) continue;
     if (row.ageHours == null || row.ageHours > MAX_RUNNER_AGE_HOURS) continue;
 
-    const score = runnerScore({ ...row, floors });
-    const label = runnerLabel(score);
+    const rawScore = runnerScore({ ...row, floors });
+    const extended = isExtended(row);
+    const score = extended ? Math.min(rawScore, 49) : rawScore;
+    const label = extended && score >= MIN_RUNNER_SCORE ? 'chase' : runnerLabel(score);
     if (!label) continue;
 
     const launchpad = scannerLaunchpad(row.dexId, row.mint);
@@ -317,12 +325,15 @@ export function buildPlays(input: {
       sells1h: row.sells1h,
       ageHours: row.ageHours,
       pairUrl: row.pairUrl,
+      website: row.website,
+      twitter: row.twitter,
+      telegram: row.telegram,
       sources: row.sources,
     });
   }
 
   plays.sort((a, b) => b.runnerScore - a.runnerScore || b.liquidityUsd - a.liquidityUsd);
-  return { book, plays: dedupe(plays).slice(0, input.limit ?? 12) };
+  return { book, plays: dedupe(plays).slice(0, input.limit ?? 24) };
 }
 
 /** Re-apply book vetoes computed from the book on screen (it carries the browser's peak). */
