@@ -6,3 +6,4 @@
 - FOMO failures degrade to wallet-only instead of showing mock data.
 - SOL + stables = cash; other tokens = open risk. DexScreener 24h change is the live mark when FOMO has no cost basis. Spotlight + Relay fills entry/unrealized. Don't treat missing basis as $0 PnL.
 - Peak equity and daily curve points persist in localStorage so drawdown/equity history compounds.
+- Agent execution lives only in server routes: the browser sees the agent's public address, intents and positions, never `AGENT_SIGNER` or `DATABASE_URL`. Every intent row (rejected too) keeps the tape row, page book numbers, sizing and quote in `play_snapshot`.
