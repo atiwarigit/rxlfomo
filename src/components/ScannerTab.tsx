@@ -14,7 +14,8 @@ import {
   type CapFilter,
   type Category,
 } from '../lib/scanner/cardFormat';
-import { applyBook, vetoSentence } from '../lib/scanner/rules';
+import { MAX_RUNNER_AGE_HOURS, applyBook, bookNumbers, floorsFor, vetoSentence } from '../lib/scanner/rules';
+import { CONFIRMING, type AgentIntent, type AgentState, type IntentRequest } from '../types/agent';
 import type { PortfolioSnapshot } from '../types/portfolio';
 import type { Play, PlaysResponse } from '../types/plays';
 
@@ -51,6 +52,37 @@ async function fetchPlays(handle: string): Promise<PlaysResponse> {
   }
   if (!res.ok || !body) throw new Error(body?.message || `HTTP ${res.status}`);
   return body;
+}
+
+type AgentRead = { state: AgentState } | { unavailable: string };
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: url.endsWith('state') ? 'GET' : 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: url.endsWith('state') ? undefined : JSON.stringify(body),
+  });
+  const parsed = (await res.json().catch(() => null)) as (T & { message?: string }) | null;
+  if (!res.ok || !parsed) throw Object.assign(new Error(parsed?.message || `HTTP ${res.status}`), { status: res.status });
+  return parsed;
+}
+
+async function fetchAgent(): Promise<AgentRead> {
+  try {
+    return { state: await postJson<AgentState>('/api/agent/state', null) };
+  } catch (err) {
+    return { unavailable: err instanceof Error ? err.message : 'agent state failed' };
+  }
+}
+
+const STATUS_RANK: Record<AgentIntent['status'], number> = { pending: 0, expired: 1, rejected: 1, failed: 2, signed: 2 };
+
+function statusRank(i: AgentIntent): number {
+  return STATUS_RANK[i.status];
+}
+
+function short(addr: string): string {
+  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
 
 function oneHourTone(v: number | null): string {
@@ -101,7 +133,56 @@ function Social({ href, label }: { href?: string; label: string }) {
   );
 }
 
-function PlayCard({ play, isNew }: { play: Play; isNew: boolean }) {
+interface CardAgent {
+  canStage: boolean;
+  intent?: AgentIntent;
+  busy: boolean;
+  now: number;
+  onStage: () => void;
+  onConfirm: (id: string) => void;
+}
+
+function IntentLine({ agent }: { agent: CardAgent }) {
+  const it = agent.intent;
+  if (!it) return null;
+  if (it.status === 'rejected') {
+    return <p className="text-[12px] text-rose-300/90">Rejected — {it.rejectReason}</p>;
+  }
+  if (it.status === 'signed') {
+    return (
+      <p className="text-[12px] text-emerald-300">
+        Signed {it.sizeUsd != null ? money(it.sizeUsd) : ''} ·{' '}
+        <a className="underline" href={`https://solscan.io/tx/${it.signature}`} target="_blank" rel="noreferrer">
+          {it.signature ? short(it.signature) : 'tx'}
+        </a>
+      </p>
+    );
+  }
+  if (it.status === 'failed' && it.error === CONFIRMING) {
+    return <p className="text-[12px] text-amber-200">Confirming {it.sizeUsd != null ? money(it.sizeUsd) : ''}…</p>;
+  }
+  if (it.status === 'failed') return <p className="text-[12px] text-rose-300/90">Failed — {it.error}</p>;
+  const left = it.expiresAt ? Math.max(0, Math.ceil((Date.parse(it.expiresAt) - agent.now) / 1000)) : 0;
+  const live = it.status === 'pending' && left > 0;
+  return (
+    <div className="flex items-center gap-2 text-[12px]">
+      <span className={live ? 'text-amber-200' : 'text-white/40'}>
+        {live ? 'Pending' : 'Expired'} {it.sizeUsd != null ? money(it.sizeUsd) : ''} · impact{' '}
+        {it.priceImpactPct != null ? `${it.priceImpactPct.toFixed(2)}%` : '—'}
+      </span>
+      <button
+        type="button"
+        disabled={!live || agent.busy}
+        onClick={() => agent.onConfirm(it.id)}
+        className="ml-auto rounded-md border border-amber-300/50 px-2 py-0.5 text-amber-200 hover:bg-amber-300/10 disabled:border-white/10 disabled:text-white/30 disabled:hover:bg-transparent"
+      >
+        {agent.busy ? 'Confirming…' : live ? `Confirm ${left}s` : 'Expired'}
+      </button>
+    </div>
+  );
+}
+
+function PlayCard({ play, isNew, agent }: { play: Play; isNew: boolean; agent: CardAgent }) {
   const [copied, setCopied] = useState(false);
   const txns = (play.buys1h ?? 0) + (play.sells1h ?? 0);
   const share = txns ? Math.round(((play.buys1h ?? 0) / txns) * 100) : null;
@@ -162,6 +243,8 @@ function PlayCard({ play, isNew }: { play: Play; isNew: boolean }) {
         ) : null}
       </p>
 
+      <IntentLine agent={agent} />
+
       <div className="mt-auto flex items-center gap-2 pt-1">
         <button
           type="button"
@@ -179,6 +262,16 @@ function PlayCard({ play, isNew }: { play: Play; isNew: boolean }) {
         <Social href={play.website} label="web" />
         <Social href={play.twitter} label="X" />
         <Social href={play.telegram} label="tg" />
+        {agent.canStage && agent.intent?.status !== 'pending' ? (
+          <button
+            type="button"
+            disabled={agent.busy}
+            onClick={agent.onStage}
+            className="text-[12px] font-semibold text-sky-300 hover:text-sky-200 disabled:opacity-50"
+          >
+            {agent.busy ? 'Staging…' : 'Stage'}
+          </button>
+        ) : null}
         <a
           href={play.pairUrl}
           target="_blank"
@@ -250,6 +343,10 @@ export function ScannerTab({
   const [now, setNow] = useState(() => Date.now());
   const [nonce, setNonce] = useState(0);
   const [diff, setDiff] = useState<{ added: Set<string>; removed: number } | null>(null);
+  const [agent, setAgent] = useState<AgentRead | null>(null);
+  const [staged, setStaged] = useState<Map<string, AgentIntent>>(() => new Map());
+  const [busyMint, setBusyMint] = useState<string | null>(null);
+  const [addrCopied, setAddrCopied] = useState(false);
   const handleRef = useRef(key);
   const prevMints = useRef<Set<string> | null>(null);
 
@@ -287,6 +384,10 @@ export function ScannerTab({
     }
   }, [handle, key]);
 
+  const loadAgent = useCallback(async () => {
+    setAgent(await fetchAgent());
+  }, []);
+
   useEffect(() => {
     let stopped = false;
     let busy = false;
@@ -295,7 +396,7 @@ export function ScannerTab({
       busy = true;
       setTickAt(Date.now());
       try {
-        await loadPlays();
+        await Promise.all([loadPlays(), loadAgent()]);
       } finally {
         busy = false;
       }
@@ -337,6 +438,70 @@ export function ScannerTab({
   const sizeN = vetoes.length ? 0 : plays.filter((p) => p.decision === 'size').length;
   const watchN = plays.length - sizeN;
   const secs = Math.max(0, Math.floor((now - tickAt) / 1000));
+  const agentState = agent && 'state' in agent ? agent.state : null;
+  const intentByMint = useMemo(() => {
+    const byId = new Map<string, AgentIntent>();
+    for (const i of [...(agentState?.intents ?? []), ...staged.values()]) {
+      if (i.handle.toLowerCase() !== key) continue;
+      const prev = byId.get(i.id);
+      if (!prev || statusRank(i) >= statusRank(prev)) byId.set(i.id, i);
+    }
+    const out = new Map<string, AgentIntent>();
+    for (const i of byId.values()) {
+      const prev = out.get(i.mint);
+      if (!prev || Date.parse(i.createdAt) > Date.parse(prev.createdAt)) out.set(i.mint, i);
+    }
+    return out;
+  }, [agentState, staged, key]);
+  const agentHeld = useMemo(() => new Set((agentState?.positions ?? []).map((p) => p.mint)), [agentState]);
+  const minLiq = floorsFor(handle, book.equity).minLiq;
+  const canStage = (p: Play) =>
+    Boolean(agentState) &&
+    !vetoes.length &&
+    p.chain === 'solana' &&
+    p.runnerLabel !== 'chase' &&
+    p.ageHours != null &&
+    p.ageHours <= MAX_RUNNER_AGE_HOURS &&
+    p.liquidityUsd >= minLiq &&
+    !agentHeld.has(p.mint);
+
+  const remember = (it: AgentIntent) =>
+    setStaged((m) => {
+      const next = new Map(m);
+      next.set(it.id, it);
+      return next;
+    });
+
+  async function stage(p: Play) {
+    setBusyMint(p.mint);
+    try {
+      const body: IntentRequest = {
+        handle,
+        mint: p.mint,
+        side: 'buy',
+        reason: p.reason,
+        book: portfolio ? bookNumbers(portfolio) : null,
+      };
+      remember(await postJson<AgentIntent>('/api/agent/intent', body));
+    } catch (err) {
+      setError(err instanceof Error ? `Stage failed: ${err.message}` : 'Stage failed');
+    } finally {
+      setBusyMint(null);
+    }
+  }
+
+  async function confirm(p: Play, intentId: string) {
+    setBusyMint(p.mint);
+    try {
+      remember(await postJson<AgentIntent>('/api/agent/confirm', { intentId }));
+    } catch (err) {
+      setError(err instanceof Error ? `Confirm failed: ${err.message}` : 'Confirm failed');
+    } finally {
+      setBusyMint(null);
+      void loadAgent();
+    }
+  }
+
   const unchanged = diff != null && diff.added.size === 0 && diff.removed === 0;
 
   const chatSnapshot = useMemo<ScannerChatSnapshot>(
@@ -390,6 +555,37 @@ export function ScannerTab({
             <p className="flex-1 text-xs text-white/40">No book veto — a size card carries a cap, not an order.</p>
           )}
         </div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 pt-2 font-mono text-xs">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/45">Agent</span>
+          {agentState ? (
+            <>
+              <button
+                type="button"
+                title={addrCopied ? 'Copied' : `Copy ${agentState.address}`}
+                className="text-white/85 hover:text-white"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(agentState.address).then(() => {
+                    setAddrCopied(true);
+                    window.setTimeout(() => setAddrCopied(false), 1200);
+                  });
+                }}
+              >
+                {addrCopied ? 'copied' : agentState.address}
+              </button>
+              <span className="text-white/60">
+                cap <span className="text-white">{money(agentState.capUsd)}</span>
+              </span>
+              <span className="text-white/60">
+                equity <span className="text-white">{agentState.equityUsd == null ? '—' : money(agentState.equityUsd)}</span>
+              </span>
+              <span className={agentState.pendingCount ? 'text-amber-300' : 'text-white/60'}>
+                {agentState.pendingCount} pending
+              </span>
+            </>
+          ) : (
+            <span className="text-white/40">{agent && 'unavailable' in agent ? agent.unavailable : 'reading agent wallet…'}</span>
+          )}
+        </div>
         {body ? (
           <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
             <FilterRow<Category>
@@ -423,7 +619,19 @@ export function ScannerTab({
       ) : (
         <section className="grid items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {shown.slice(0, MAX_CARDS).map((p) => (
-            <PlayCard key={`${p.chain}:${p.mint}`} play={p} isNew={Boolean(diff?.added.has(p.mint))} />
+            <PlayCard
+              key={`${p.chain}:${p.mint}`}
+              play={p}
+              isNew={Boolean(diff?.added.has(p.mint))}
+              agent={{
+                canStage: canStage(p),
+                intent: intentByMint.get(p.mint),
+                busy: busyMint === p.mint,
+                now,
+                onStage: () => void stage(p),
+                onConfirm: (id) => void confirm(p, id),
+              }}
+            />
           ))}
         </section>
       )}
