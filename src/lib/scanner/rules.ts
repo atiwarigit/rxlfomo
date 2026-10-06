@@ -56,22 +56,30 @@ export interface BookNumbers {
   cashPct: number;
   drawdownPct: number;
   top3Pct?: number;
+  topNamePct?: number;
+  cashUsd?: number;
 }
 
 export function bookNumbers(snap: PortfolioSnapshot): BookNumbers {
   const s = snap.summary;
   const equity = s.totalEquity || 0;
-  const top3 = [...snap.openPositions]
-    .map((p) => p.sizeUsd)
-    .sort((a, b) => b - a)
-    .slice(0, 3)
-    .reduce((a, b) => a + b, 0);
+  const sizes = snap.openPositions.map((p) => p.sizeUsd).sort((a, b) => b - a);
+  const top3 = sizes.slice(0, 3).reduce((a, b) => a + b, 0);
   return {
     equity,
+    cashUsd: s.cashUsd,
     cashPct: equity > 0 ? (s.cashUsd / equity) * 100 : 0,
     drawdownPct: s.currentDrawdownPct || 0,
     top3Pct: equity > 0 ? (top3 / equity) * 100 : 0,
+    topNamePct: equity > 0 && sizes.length ? (sizes[0] / equity) * 100 : 0,
   };
+}
+
+/** Per-play size cap from the book on the page: 15% of book equity, never past the 20% cash floor. */
+export function bookSizeCap(input: BookNumbers): number {
+  const nameCap = (input.equity * RULES.maxNamePct) / 100;
+  const cashAboveFloor = (input.cashUsd ?? 0) - (input.equity * RULES.minCashPct) / 100;
+  return Math.max(0, Math.floor(Math.min(nameCap, cashAboveFloor)));
 }
 
 /** Short clauses; the header joins them into one "Size $0 — …" sentence. */
@@ -83,6 +91,9 @@ export function bookVetoes(input: BookNumbers): string[] {
   }
   if (input.drawdownPct <= RULES.drawdownCutPct) {
     out.push(`drawdown ${signedPct(input.drawdownPct)} past the ${signedPct(RULES.drawdownCutPct)} cut`);
+  }
+  if ((input.topNamePct ?? 0) > RULES.maxNamePct) {
+    out.push(`top name ${input.topNamePct!.toFixed(0)}% over the ${RULES.maxNamePct}% cap`);
   }
   if ((input.top3Pct ?? 0) > RULES.maxTop3Pct) {
     out.push(`top 3 names ${input.top3Pct!.toFixed(0)}% over the ${RULES.maxTop3Pct}% cap`);
