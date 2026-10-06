@@ -12,7 +12,8 @@
     "build:api": "node scripts/bundle-api.mjs",
     "lint": "tsc -b --pretty false",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "agent:keygen": "node scripts/agent-keygen.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.77",
@@ -20,6 +21,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.511.0",
+    "pg": "^8.23.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "recharts": "^2.15.3"
@@ -27,6 +29,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.7",
     "@types/node": "^22.15.21",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
     "@vitejs/plugin-react": "^4.5.0",

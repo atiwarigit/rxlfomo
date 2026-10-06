@@ -3,6 +3,7 @@ import type { Connect, Plugin, ViteDevServer } from 'vite';
 import { loadPortfolio } from '../src/lib/portfolio/load.ts';
 import chatHandler from './vercel-chat.ts';
 import playsHandler from './vercel-plays.ts';
+import { confirmHandler, intentHandler, stateHandler } from './vercel-agent.ts';
 import { knownWallets, sameHandle } from './knownWallets.ts';
 
 function readUrl(req: IncomingMessage): URL {
@@ -130,6 +131,43 @@ async function handlePlays(req: IncomingMessage, res: ServerResponse, env: Recor
   );
 }
 
+const AGENT_ROUTES = {
+  '/api/agent/intent': intentHandler,
+  '/api/agent/confirm': confirmHandler,
+  '/api/agent/state': stateHandler,
+} as const;
+
+async function handleAgent(
+  path: keyof typeof AGENT_ROUTES,
+  req: IncomingMessage,
+  res: ServerResponse,
+  env: Record<string, string>,
+) {
+  let body: unknown = {};
+  try {
+    body = req.method === 'POST' ? await readJsonBody(req) : {};
+  } catch {
+    send(res, 400, { error: 'rejected', message: 'body must be JSON' });
+    return;
+  }
+  await AGENT_ROUTES[path](
+    { method: req.method, body },
+    {
+      setHeader: (k, v) => {
+        res.setHeader(k, v);
+      },
+      status: (code: number) => ({
+        json: (payload: unknown) => send(res, code, payload),
+        end: () => {
+          res.statusCode = code;
+          res.end();
+        },
+      }),
+    },
+    env,
+  );
+}
+
 function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
   return (req, res, next) => {
     const path = req.url?.split('?')[0];
@@ -155,6 +193,10 @@ function onRequest(env: Record<string, string>): Connect.NextHandleFunction {
     }
     if (path === '/api/plays') {
       void handlePlays(req, res, env);
+      return;
+    }
+    if (path && path in AGENT_ROUTES) {
+      void handleAgent(path as keyof typeof AGENT_ROUTES, req, res, env);
       return;
     }
     if (path === '/api/chat') {

@@ -15,6 +15,15 @@
     },
     "api/plays.js": {
       "maxDuration": 30
+    },
+    "api/agent/intent.js": {
+      "maxDuration": 30
+    },
+    "api/agent/confirm.js": {
+      "maxDuration": 60
+    },
+    "api/agent/state.js": {
+      "maxDuration": 30
     }
   }
 }
