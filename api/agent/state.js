@@ -24,12 +24,23 @@ async function usdPrices(mints, fetchFn = fetch) {
 
 // src/lib/agent/chain.ts
 var TOKEN_PROGRAMS = ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"];
-function rpcUrl(env) {
-  if (env.SOLANA_RPC_URL) return env.SOLANA_RPC_URL;
-  if (env.HELIUS_API_KEY) return `https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`;
-  return "https://solana-rpc.publicnode.com";
+function rpcUrls(env) {
+  if (env.SOLANA_RPC_URL) return [env.SOLANA_RPC_URL];
+  if (env.HELIUS_API_KEY) return [`https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`];
+  return ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"];
 }
-async function rpc(url, method, params, fetchFn = fetch) {
+async function rpc(urls, method, params, fetchFn = fetch) {
+  let last = new Error("no Solana RPC");
+  for (const url of urls) {
+    try {
+      return await rpcOnce(url, method, params, fetchFn);
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last;
+}
+async function rpcOnce(url, method, params, fetchFn) {
   const res = await fetchFn(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -37,16 +48,21 @@ async function rpc(url, method, params, fetchFn = fetch) {
     signal: AbortSignal.timeout(15e3)
   });
   const body = await res.json().catch(() => ({}));
-  if (body.error) throw new Error(body.error.message || `${method} failed`);
+  if (body.error) {
+    const err = body.error.data?.err;
+    const log = body.error.data?.logs?.filter((l) => /error|failed|insufficient/i.test(l)).slice(-1)[0];
+    const detail = [err != null ? JSON.stringify(err) : "", log || ""].filter(Boolean).join(" \u2014 ");
+    throw new Error(`${body.error.message || `${method} failed`}${detail ? `: ${detail}` : ""}`);
+  }
   if (!res.ok) throw new Error(`${method} HTTP ${res.status}`);
   return body.result;
 }
-async function walletBalances(url, owner, fetchFn = fetch) {
+async function walletBalances(urls, owner, fetchFn = fetch) {
   const [lamports, ...programs] = await Promise.all([
-    rpc(url, "getBalance", [owner, { commitment: "confirmed" }], fetchFn),
+    rpc(urls, "getBalance", [owner, { commitment: "confirmed" }], fetchFn),
     ...TOKEN_PROGRAMS.map(
       (programId) => rpc(
-        url,
+        urls,
         "getTokenAccountsByOwner",
         [owner, { programId }, { encoding: "jsonParsed", commitment: "confirmed" }],
         fetchFn
@@ -158,7 +174,7 @@ async function bootWallet(deps2) {
   return deps2.store.bootWallet(deps2.signer.address, deps2.env.AGENT_WITHDRAW?.trim() || null);
 }
 async function balancesOf(deps2, address) {
-  const balances = await walletBalances(deps2.rpcUrl, address, deps2.fetchFn);
+  const balances = await walletBalances(deps2.rpcUrls, address, deps2.fetchFn);
   const { equityUsd } = await walletEquity(balances, deps2.fetchFn);
   return { ...balances, equityUsd };
 }
@@ -606,7 +622,7 @@ function deps(env) {
   return {
     store: pgStore(url),
     signer: loadSigner(env.AGENT_SIGNER),
-    rpcUrl: rpcUrl(env),
+    rpcUrls: rpcUrls(env),
     env: { JUPITER_API_URL: env.JUPITER_API_URL, JUPITER_API_KEY: env.JUPITER_API_KEY, AGENT_WITHDRAW: env.AGENT_WITHDRAW },
     tape: fetchTape
   };

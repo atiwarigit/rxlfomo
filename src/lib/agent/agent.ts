@@ -29,7 +29,7 @@ const LAND_WAIT_MS = 22_000;
 export interface AgentDeps {
   store: AgentStore;
   signer: AgentSigner;
-  rpcUrl: string;
+  rpcUrls: string[];
   env: JupiterEnv & { AGENT_WITHDRAW?: string };
   tape: () => Promise<{ rows: TapeRow[]; fetchedAt: number }>;
   fetchFn?: typeof fetch;
@@ -106,7 +106,7 @@ async function bootWallet(deps: AgentDeps): Promise<WalletRow> {
 }
 
 async function balancesOf(deps: AgentDeps, address: string): Promise<WalletBalances & { equityUsd: number }> {
-  const balances = await walletBalances(deps.rpcUrl, address, deps.fetchFn);
+  const balances = await walletBalances(deps.rpcUrls, address, deps.fetchFn);
   const { equityUsd } = await walletEquity(balances, deps.fetchFn);
   return { ...balances, equityUsd };
 }
@@ -222,6 +222,10 @@ export async function confirmIntent(deps: AgentDeps, intentId: string): Promise<
   const claimed = await deps.store.claimPending(intentId);
   if (!claimed) throw new AgentError(409, 'intent expired or already confirming');
 
+  if (intent.side === 'buy' && (await deps.store.position(intent.mint))) {
+    await deps.store.finishIntent(intentId, { status: 'failed', error: 'agent already holds this mint' });
+    return publicIntent((await deps.store.intent(intentId))!);
+  }
   const q = intent.playSnapshot.quote as { inputMint: string; outputMint: string; amount: string; slippageBps: number };
   const errors: string[] = [];
   let sent: string | null = null;
@@ -236,10 +240,10 @@ export async function confirmIntent(deps: AgentDeps, intentId: string): Promise<
       if (impact > MAX_IMPACT_PCT) throw new Error(`price impact ${impact.toFixed(2)}% over 3% at confirm`);
       const swap = await buildSwap(quote, wallet.address, deps.env, deps.fetchFn);
       const signed = signSwapTransaction(swap.swapTransaction, deps.signer);
-      await sendTransaction(deps.rpcUrl, signed.signed, deps.fetchFn);
+      await sendTransaction(deps.rpcUrls, signed.signed, deps.fetchFn);
       const signature = signed.signature;
       sent = signature;
-      const landed = await waitForSignature(deps.rpcUrl, signature, swap.lastValidBlockHeight, LAND_WAIT_MS, deps.fetchFn);
+      const landed = await waitForSignature(deps.rpcUrls, signature, swap.lastValidBlockHeight, LAND_WAIT_MS, deps.fetchFn);
       if (landed.state === 'unknown') {
         await deps.store.finishIntent(intentId, {
           status: 'failed',
@@ -251,7 +255,7 @@ export async function confirmIntent(deps: AgentDeps, intentId: string): Promise<
       if (landed.state === 'failed') throw new Error(landed.error);
 
       if (intent.side === 'buy') {
-        const qty = await walletBalances(deps.rpcUrl, wallet.address, deps.fetchFn)
+        const qty = await walletBalances(deps.rpcUrls, wallet.address, deps.fetchFn)
           .then((b) => b.tokens.find((t) => t.mint === intent.mint)?.raw)
           .catch(() => undefined);
         await deps.store.upsertBuy({

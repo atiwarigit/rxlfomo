@@ -62,12 +62,23 @@ async function buildSwap(quote, user, env, fetchFn = fetch) {
 
 // src/lib/agent/chain.ts
 var TOKEN_PROGRAMS = ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"];
-function rpcUrl(env) {
-  if (env.SOLANA_RPC_URL) return env.SOLANA_RPC_URL;
-  if (env.HELIUS_API_KEY) return `https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`;
-  return "https://solana-rpc.publicnode.com";
+function rpcUrls(env) {
+  if (env.SOLANA_RPC_URL) return [env.SOLANA_RPC_URL];
+  if (env.HELIUS_API_KEY) return [`https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`];
+  return ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"];
 }
-async function rpc(url, method, params, fetchFn = fetch) {
+async function rpc(urls, method, params, fetchFn = fetch) {
+  let last = new Error("no Solana RPC");
+  for (const url of urls) {
+    try {
+      return await rpcOnce(url, method, params, fetchFn);
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last;
+}
+async function rpcOnce(url, method, params, fetchFn) {
   const res = await fetchFn(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -75,16 +86,21 @@ async function rpc(url, method, params, fetchFn = fetch) {
     signal: AbortSignal.timeout(15e3)
   });
   const body = await res.json().catch(() => ({}));
-  if (body.error) throw new Error(body.error.message || `${method} failed`);
+  if (body.error) {
+    const err = body.error.data?.err;
+    const log = body.error.data?.logs?.filter((l) => /error|failed|insufficient/i.test(l)).slice(-1)[0];
+    const detail = [err != null ? JSON.stringify(err) : "", log || ""].filter(Boolean).join(" \u2014 ");
+    throw new Error(`${body.error.message || `${method} failed`}${detail ? `: ${detail}` : ""}`);
+  }
   if (!res.ok) throw new Error(`${method} HTTP ${res.status}`);
   return body.result;
 }
-async function walletBalances(url, owner, fetchFn = fetch) {
+async function walletBalances(urls, owner, fetchFn = fetch) {
   const [lamports, ...programs] = await Promise.all([
-    rpc(url, "getBalance", [owner, { commitment: "confirmed" }], fetchFn),
+    rpc(urls, "getBalance", [owner, { commitment: "confirmed" }], fetchFn),
     ...TOKEN_PROGRAMS.map(
       (programId) => rpc(
-        url,
+        urls,
         "getTokenAccountsByOwner",
         [owner, { programId }, { encoding: "jsonParsed", commitment: "confirmed" }],
         fetchFn
@@ -107,19 +123,19 @@ async function walletBalances(url, owner, fetchFn = fetch) {
     tokens
   };
 }
-async function sendTransaction(url, base64, fetchFn = fetch) {
+async function sendTransaction(urls, base64, fetchFn = fetch) {
   return rpc(
-    url,
+    urls,
     "sendTransaction",
     [base64, { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 0 }],
     fetchFn
   );
 }
-async function waitForSignature(url, signature, lastValidBlockHeight, timeoutMs, fetchFn = fetch) {
+async function waitForSignature(urls, signature, lastValidBlockHeight, timeoutMs, fetchFn = fetch) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     const st = await rpc(
-      url,
+      urls,
       "getSignatureStatuses",
       [[signature]],
       fetchFn
@@ -127,7 +143,7 @@ async function waitForSignature(url, signature, lastValidBlockHeight, timeoutMs,
     const s = st?.value?.[0];
     if (s?.err) return { state: "failed", error: `on-chain error ${JSON.stringify(s.err)}` };
     if (s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized")) return { state: "confirmed" };
-    const height = await rpc(url, "getBlockHeight", [{ commitment: "confirmed" }], fetchFn).catch(() => 0);
+    const height = await rpc(urls, "getBlockHeight", [{ commitment: "confirmed" }], fetchFn).catch(() => 0);
     if (!s && height > lastValidBlockHeight) return { state: "failed", error: "blockhash expired before the swap landed" };
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -292,6 +308,10 @@ async function confirmIntent(deps2, intentId) {
   }
   const claimed = await deps2.store.claimPending(intentId);
   if (!claimed) throw new AgentError(409, "intent expired or already confirming");
+  if (intent.side === "buy" && await deps2.store.position(intent.mint)) {
+    await deps2.store.finishIntent(intentId, { status: "failed", error: "agent already holds this mint" });
+    return publicIntent(await deps2.store.intent(intentId));
+  }
   const q = intent.playSnapshot.quote;
   const errors = [];
   let sent = null;
@@ -306,10 +326,10 @@ async function confirmIntent(deps2, intentId) {
       if (impact > MAX_IMPACT_PCT) throw new Error(`price impact ${impact.toFixed(2)}% over 3% at confirm`);
       const swap = await buildSwap(quote, wallet.address, deps2.env, deps2.fetchFn);
       const signed = signSwapTransaction(swap.swapTransaction, deps2.signer);
-      await sendTransaction(deps2.rpcUrl, signed.signed, deps2.fetchFn);
+      await sendTransaction(deps2.rpcUrls, signed.signed, deps2.fetchFn);
       const signature = signed.signature;
       sent = signature;
-      const landed = await waitForSignature(deps2.rpcUrl, signature, swap.lastValidBlockHeight, LAND_WAIT_MS, deps2.fetchFn);
+      const landed = await waitForSignature(deps2.rpcUrls, signature, swap.lastValidBlockHeight, LAND_WAIT_MS, deps2.fetchFn);
       if (landed.state === "unknown") {
         await deps2.store.finishIntent(intentId, {
           status: "failed",
@@ -320,7 +340,7 @@ async function confirmIntent(deps2, intentId) {
       }
       if (landed.state === "failed") throw new Error(landed.error);
       if (intent.side === "buy") {
-        const qty = await walletBalances(deps2.rpcUrl, wallet.address, deps2.fetchFn).then((b) => b.tokens.find((t) => t.mint === intent.mint)?.raw).catch(() => void 0);
+        const qty = await walletBalances(deps2.rpcUrls, wallet.address, deps2.fetchFn).then((b) => b.tokens.find((t) => t.mint === intent.mint)?.raw).catch(() => void 0);
         await deps2.store.upsertBuy({
           mint: intent.mint,
           symbol: intent.symbol,
@@ -760,7 +780,7 @@ function deps(env) {
   return {
     store: pgStore(url),
     signer: loadSigner(env.AGENT_SIGNER),
-    rpcUrl: rpcUrl(env),
+    rpcUrls: rpcUrls(env),
     env: { JUPITER_API_URL: env.JUPITER_API_URL, JUPITER_API_KEY: env.JUPITER_API_KEY, AGENT_WITHDRAW: env.AGENT_WITHDRAW },
     tape: fetchTape
   };

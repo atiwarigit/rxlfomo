@@ -131,7 +131,7 @@ function deps(over: Partial<AgentDeps> & { rows?: TapeRow[] } = {}): AgentDeps {
   return {
     store: memoryStore(),
     signer,
-    rpcUrl: 'http://rpc.test',
+    rpcUrls: ['http://rpc.test'],
     env: {},
     tape: async () => ({ rows: over.rows ?? [row()], fetchedAt: Date.now() }),
     fetchFn: vi.fn(async () => {
@@ -228,6 +228,31 @@ describe('confirm', () => {
     const out = await stageIntent(d, { handle: 'SoftMereElk', mint: 'nope', side: 'buy', book: goodBook });
     await expect(confirmIntent(d, out.id)).rejects.toThrow(/intent is rejected/);
     await expect(confirmIntent(d, 'int_missing')).rejects.toThrow(/no such intent/);
+  });
+
+  it('fails a second buy of a mint the agent already holds without quoting', async () => {
+    const held = { mint: row().mint, symbol: 'RUN', qty: '5', costUsd: 30, openedAt: '', updatedAt: '' };
+    const store = memoryStore([held]);
+    const d = deps({ store });
+    await store.insertIntent({
+      id: 'int_dup',
+      handle: 'SoftMereElk',
+      mint: row().mint,
+      symbol: 'RUN',
+      side: 'buy',
+      status: 'pending',
+      reason: null,
+      rejectReason: null,
+      sizeUsd: 30,
+      quoteOut: '1',
+      priceImpactPct: 1,
+      playSnapshot: { quote: { inputMint: 'USDC', outputMint: row().mint, amount: '30000000', slippageBps: 150 } },
+      expiresInSec: 90,
+    });
+    const out = await confirmIntent(d, 'int_dup');
+    expect(out.status).toBe('failed');
+    expect(out.error).toBe('agent already holds this mint');
+    expect(d.fetchFn).not.toHaveBeenCalled();
   });
 
   it('retries once, never widens slippage, and stores the error', async () => {
