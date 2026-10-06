@@ -1,5 +1,5 @@
 import { AgentError, agentState, confirmIntent, stageIntent, type AgentDeps } from '../src/lib/agent/agent.ts';
-import { rpcUrl } from '../src/lib/agent/chain.ts';
+import { rpcUrls } from '../src/lib/agent/chain.ts';
 import { loadSigner } from '../src/lib/agent/keys.ts';
 import { databaseUrl, pgStore } from '../src/lib/agent/store.ts';
 import { fetchTape } from '../src/lib/scanner/tape.ts';
@@ -37,7 +37,7 @@ function deps(env: Env): AgentDeps {
   return {
     store: pgStore(url),
     signer: loadSigner(env.AGENT_SIGNER),
-    rpcUrl: rpcUrl(env),
+    rpcUrls: rpcUrls(env),
     env: { JUPITER_API_URL: env.JUPITER_API_URL, JUPITER_API_KEY: env.JUPITER_API_KEY, AGENT_WITHDRAW: env.AGENT_WITHDRAW },
     tape: fetchTape,
   };
