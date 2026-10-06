@@ -439,20 +439,24 @@ export function ScannerTab({
   const watchN = plays.length - sizeN;
   const secs = Math.max(0, Math.floor((now - tickAt) / 1000));
   const agentState = agent && 'state' in agent ? agent.state : null;
-  const intentByMint = useMemo(() => {
+  const intents = useMemo(() => {
     const byId = new Map<string, AgentIntent>();
     for (const i of [...(agentState?.intents ?? []), ...staged.values()]) {
-      if (i.handle.toLowerCase() !== key) continue;
       const prev = byId.get(i.id);
       if (!prev || statusRank(i) >= statusRank(prev)) byId.set(i.id, i);
     }
+    return [...byId.values()];
+  }, [agentState, staged]);
+  const intentByMint = useMemo(() => {
     const out = new Map<string, AgentIntent>();
-    for (const i of byId.values()) {
+    for (const i of intents) {
+      if (i.handle.toLowerCase() !== key) continue;
       const prev = out.get(i.mint);
       if (!prev || Date.parse(i.createdAt) > Date.parse(prev.createdAt)) out.set(i.mint, i);
     }
     return out;
-  }, [agentState, staged, key]);
+  }, [intents, key]);
+  const pendingN = intents.filter((i) => i.status === 'pending' && i.expiresAt && Date.parse(i.expiresAt) > now).length;
   const agentHeld = useMemo(() => new Set((agentState?.positions ?? []).map((p) => p.mint)), [agentState]);
   const minLiq = floorsFor(handle, book.equity).minLiq;
   const canStage = (p: Play) =>
@@ -578,8 +582,8 @@ export function ScannerTab({
               <span className="text-white/60">
                 equity <span className="text-white">{agentState.equityUsd == null ? '—' : money(agentState.equityUsd)}</span>
               </span>
-              <span className={agentState.pendingCount ? 'text-amber-300' : 'text-white/60'}>
-                {agentState.pendingCount} pending
+              <span className={pendingN ? 'text-amber-300' : 'text-white/60'}>
+                {pendingN} pending
               </span>
             </>
           ) : (
